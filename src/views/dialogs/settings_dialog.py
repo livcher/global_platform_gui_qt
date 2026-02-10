@@ -156,10 +156,10 @@ class StorageTab(QWidget):
         if is_loaded:
             tag_count = self._storage_info.get("tag_count", 0)
             status_text = f"✓ Storage loaded ({tag_count} saved tag{'s' if tag_count != 1 else ''})"
-            status_color = "color: #4CAF50;"
+            status_color = f"color: {Colors.success()};"
         else:
             status_text = "✗ Storage not loaded"
-            status_color = "color: #f44336;"
+            status_color = f"color: {Colors.error()};"
 
         self._status_label = QLabel(status_text)
         self._status_label.setStyleSheet(status_color)
@@ -358,10 +358,10 @@ class StorageTab(QWidget):
         if is_loaded:
             tag_count = storage_info.get("tag_count", 0)
             status_text = f"✓ Storage loaded ({tag_count} saved tag{'s' if tag_count != 1 else ''})"
-            status_color = "color: #4CAF50;"
+            status_color = f"color: {Colors.success()};"
         else:
             status_text = "✗ Storage not loaded"
-            status_color = "color: #f44336;"
+            status_color = f"color: {Colors.error()};"
 
         self._status_label.setText(status_text)
         self._status_label.setStyleSheet(status_color)
@@ -394,17 +394,17 @@ class PluginItem(QFrame):
     def _setup_ui(self, plugin_info: Dict[str, Any], enabled: bool):
         self._menu_btn = None  # Initialize for non-YAML plugins
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet("""
-            PluginItem {
-                background-color: #adadad;
-                border: 1px solid #3d3d3d;
+        self.setStyleSheet(f"""
+            PluginItem {{
+                background-color: {Colors.card_bg()};
+                border: 1px solid {Colors.card_border()};
                 border-radius: 4px;
                 padding: 8px;
                 margin: 2px;
-            }
-            PluginItem:hover {
-                border-color: #5d5d5d;
-            }
+            }}
+            PluginItem:hover {{
+                border-color: {Colors.card_hover_border()};
+            }}
         """)
 
         layout = QHBoxLayout(self)
@@ -451,16 +451,16 @@ class PluginItem(QFrame):
         if self._is_yaml:
             self._menu_btn = QToolButton()
             self._menu_btn.setText("⋮")
-            self._menu_btn.setStyleSheet("""
-                QToolButton {
+            self._menu_btn.setStyleSheet(f"""
+                QToolButton {{
                     border: none;
                     padding: 4px 8px;
                     font-weight: bold;
-                }
-                QToolButton:hover {
-                    background-color: #5d5d5d;
+                }}
+                QToolButton:hover {{
+                    background-color: {Colors.hover_bg()};
                     border-radius: 4px;
-                }
+                }}
             """)
             # Use larger font for menu icon to be visible on Windows
             menu_font = self._menu_btn.font()
@@ -1410,7 +1410,7 @@ class FidesmoTab(QWidget):
         """Update the status label based on current stored values."""
         if self._has_stored_token():
             self._status_label.setText("API Token: Configured")
-            self._status_label.setStyleSheet("color: #4CAF50;")
+            self._status_label.setStyleSheet(f"color: {Colors.success()};")
         else:
             self._status_label.setText("API Token: Not configured")
             self._status_label.setStyleSheet("")

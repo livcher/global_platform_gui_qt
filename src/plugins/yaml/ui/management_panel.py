@@ -28,6 +28,7 @@ import re
 from .state_monitor import StateMonitor, StateDisplayWidget, StateReaderDefinition
 from .dialog_builder import DialogBuilder
 from ..schema import FieldDefinition, ManagementAction, WorkflowDefinition
+from src.utils.colors import Colors
 from ..encoding.encoder import TemplateProcessor
 from ..logging import logger
 from ..workflow.engine import WorkflowBuilder, WorkflowEngine
@@ -288,6 +289,40 @@ class ManagementPanel(QWidget):
         pass
 
 
+class _CommandConsentService:
+    """
+    Lightweight consent service for command step execution.
+
+    Checks config for prior consent, shows dialog if needed,
+    and persists the choice.
+    """
+
+    def __init__(self, config: dict, save_config, parent_widget):
+        self._config = config
+        self._save_config = save_config
+        self._parent = parent_widget
+
+    def check_or_request(self, plugin_name: str, command_preview: str) -> bool:
+        """Return True if consent is granted (from cache or user dialog)."""
+        consent_map = self._config.setdefault("plugin_command_consent", {})
+
+        if consent_map.get(plugin_name):
+            return True
+
+        # Show consent dialog
+        from ...views.dialogs.command_consent_dialog import CommandConsentDialog
+
+        dialog = CommandConsentDialog(plugin_name, command_preview, self._parent)
+        accepted = dialog.exec_() == QDialog.Accepted
+
+        if accepted and dialog.remember:
+            consent_map[plugin_name] = True
+            if self._save_config:
+                self._save_config()
+
+        return accepted
+
+
 class ManagementDialog(QDialog):
     """
     Dialog wrapper for the management panel.
@@ -304,6 +339,10 @@ class ManagementDialog(QDialog):
         parent: Optional[QWidget] = None,
         applet_aid: Optional[str] = None,
         workflows: Optional[dict[str, WorkflowDefinition]] = None,
+        plugin_name: Optional[str] = None,
+        config: Optional[dict] = None,
+        save_config: Optional[Callable] = None,
+        dependency_warnings: Optional[list[str]] = None,
     ):
         """
         Initialize the management dialog.
@@ -316,6 +355,10 @@ class ManagementDialog(QDialog):
             parent: Parent widget
             applet_aid: AID of the applet (for SELECT before operations)
             workflows: Workflow definitions from the plugin schema
+            plugin_name: Plugin name for command consent tracking
+            config: App config dict for consent persistence
+            save_config: Callback to save config after consent changes
+            dependency_warnings: Warnings about missing external tool dependencies
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -330,12 +373,29 @@ class ManagementDialog(QDialog):
         self._nfc_service = nfc_service
         self._applet_aid = applet_aid
         self._workflows = workflows or {}
+        self._plugin_name = plugin_name
+        self._config = config
+        self._save_config = save_config
 
         layout = QVBoxLayout(self)
 
+        # Dependency warnings
+        if dependency_warnings:
+            warn_text = "Missing tools:\n" + "\n".join(
+                f"  - {w}" for w in dependency_warnings
+            )
+            warn_label = QLabel(warn_text)
+            warn_label.setWordWrap(True)
+            warn_label.setStyleSheet(
+                f"color: {Colors.warning_text()}; padding: 8px; "
+                f"background: {Colors.warning_bg()}; border: 1px solid {Colors.warning_border()}; "
+                f"border-radius: 4px;"
+            )
+            layout.addWidget(warn_label)
+
         # Status label for showing progress
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: gray; font-style: italic;")
+        self._status_label.setStyleSheet(f"color: {Colors.muted_text()}; font-style: italic;")
         self._status_label.hide()
         layout.addWidget(self._status_label)
 
@@ -549,6 +609,8 @@ class ManagementDialog(QDialog):
         try:
             # Build workflow engine
             builder = WorkflowBuilder()
+            if self._plugin_name:
+                builder.set_plugin_name(self._plugin_name)
 
             def progress_callback(message: str, percent: float):
                 self._status_label.setText(message)
@@ -562,6 +624,13 @@ class ManagementDialog(QDialog):
                 progress_callback=progress_callback,
             )
             context.register_service("nfc_thread", self._nfc_service)
+
+            # Register consent service for command steps
+            if self._plugin_name and self._config is not None:
+                consent_service = _CommandConsentService(
+                    self._config, self._save_config, self
+                )
+                context.register_service("consent_service", consent_service)
 
             # If we have an AID, add it to context
             if self._applet_aid:

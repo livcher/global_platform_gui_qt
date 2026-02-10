@@ -290,14 +290,23 @@ class TestScriptStep:
 class TestCommandStep:
     """Tests for CommandStep class."""
 
-    def test_allowed_command(self):
-        """Test executing an allowed command."""
+    def _make_consented_context(self):
+        """Create a WorkflowContext with a consent service that always grants."""
+        ctx = WorkflowContext()
+        mock_consent = Mock()
+        mock_consent.check_or_request.return_value = True
+        ctx.register_service("consent_service", mock_consent)
+        return ctx
+
+    def test_command_execution(self):
+        """Test executing a command."""
         step = CommandStep(
             step_id="test",
             command=["gp", "--help"],  # Command as list
             capture_output=True,
+            plugin_name="test_plugin",
         )
-        ctx = WorkflowContext()
+        ctx = self._make_consented_context()
 
         # Mock subprocess to avoid actual execution
         with patch("src.plugins.yaml.workflow.steps.command_step.subprocess.run") as mock_run:
@@ -311,18 +320,52 @@ class TestCommandStep:
         assert result.success
         mock_run.assert_called_once()
 
-    def test_blocked_command(self):
-        """Test blocking disallowed commands."""
+    def test_consent_denied(self):
+        """Test that command execution is blocked when consent is denied."""
         step = CommandStep(
             step_id="test",
-            command=["rm", "-rf", "/"],  # Command as list
+            command=["echo", "hello"],
+            plugin_name="test_plugin",
         )
         ctx = WorkflowContext()
+
+        # Mock consent service that denies consent
+        mock_consent = Mock()
+        mock_consent.check_or_request.return_value = False
+        ctx.register_service("consent_service", mock_consent)
 
         result = step.execute(ctx)
 
         assert not result.success
-        assert "not allowed" in result.error.lower()
+        assert "declined" in result.error.lower()
+
+    def test_blocked_command(self):
+        """Test that blocked commands are always rejected."""
+        step = CommandStep(
+            step_id="test",
+            command=["rm", "-rf", "/"],
+            plugin_name="test_plugin",
+        )
+        ctx = self._make_consented_context()
+
+        result = step.execute(ctx)
+
+        assert not result.success
+        assert "blocked" in result.error.lower()
+
+    def test_default_deny_without_consent_service(self):
+        """Test that commands fail without a consent service registered."""
+        step = CommandStep(
+            step_id="test",
+            command=["echo", "hello"],
+            plugin_name="test_plugin",
+        )
+        ctx = WorkflowContext()  # No consent service
+
+        result = step.execute(ctx)
+
+        assert not result.success
+        assert "consent service" in result.error.lower()
 
     def test_command_template_substitution(self):
         """Test template substitution in command."""
@@ -330,8 +373,10 @@ class TestCommandStep:
             step_id="test",
             command=["gp", "--install", "{cap_file}"],  # Command as list with template
             capture_output=True,
+            plugin_name="test_plugin",
         )
-        ctx = WorkflowContext(initial_values={"cap_file": "/path/to/applet.cap"})
+        ctx = self._make_consented_context()
+        ctx.set("cap_file", "/path/to/applet.cap")
 
         with patch("src.plugins.yaml.workflow.steps.command_step.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")

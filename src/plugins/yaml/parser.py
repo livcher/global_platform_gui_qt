@@ -16,7 +16,9 @@ from .schema import (
     ApduCommand,
     AppletDefinition,
     AppletMetadata,
+    CommandDependency,
     CURRENT_SCHEMA_VERSION,
+    DependenciesDefinition,
     DialogDefinition,
     EncodingType,
     FieldDefinition,
@@ -192,6 +194,10 @@ class YamlPluginParser:
         if "hooks" in data:
             hooks = self._parse_hooks(data["hooks"])
 
+        dependencies = None
+        if "dependencies" in data:
+            dependencies = self._parse_dependencies(data["dependencies"])
+
         return PluginSchema(
             schema_version=schema_version,
             plugin=plugin,
@@ -201,6 +207,7 @@ class YamlPluginParser:
             parameters=parameters,
             workflows=workflows,
             hooks=hooks,
+            dependencies=dependencies,
         )
 
     def _parse_plugin_info(self, data: dict) -> PluginInfo:
@@ -652,6 +659,20 @@ class YamlPluginParser:
             script=self._get(data, "script"),
             command=command,
         )
+
+    def _parse_dependencies(self, data: dict) -> DependenciesDefinition:
+        """Parse dependencies section."""
+        commands = []
+        for cmd_data in self._get(data, "commands", []):
+            commands.append(
+                CommandDependency(
+                    name=self._require(cmd_data, "name", "dependencies.command"),
+                    description=self._get(cmd_data, "description"),
+                    install_hint=self._get(cmd_data, "install_hint"),
+                    required=self._get(cmd_data, "required", True),
+                )
+            )
+        return DependenciesDefinition(commands=commands)
 
 
 def validate_hex_string(value: str, field_name: str = "value") -> bool:

@@ -285,6 +285,25 @@ class ParameterDefinition:
 
 
 # ============================================================================
+# Dependency Definitions
+# ============================================================================
+
+@dataclass
+class CommandDependency:
+    """A required external command/tool."""
+    name: str  # Command name (e.g., "yktool")
+    description: Optional[str] = None
+    install_hint: Optional[str] = None  # URL or instructions
+    required: bool = True
+
+
+@dataclass
+class DependenciesDefinition:
+    """Plugin dependencies on external tools."""
+    commands: list[CommandDependency] = field(default_factory=list)
+
+
+# ============================================================================
 # Workflow Definitions
 # ============================================================================
 
@@ -366,6 +385,7 @@ class PluginSchema:
     parameters: Optional[ParameterDefinition] = None
     workflows: dict[str, WorkflowDefinition] = field(default_factory=dict)
     hooks: Optional[HooksDefinition] = None
+    dependencies: Optional[DependenciesDefinition] = None
 
     def get_aid(self) -> Optional[str]:
         """Get the static AID if defined."""

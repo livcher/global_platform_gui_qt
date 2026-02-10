@@ -66,7 +66,7 @@ _ensure_tools_on_path()
 import gnupg
 
 import markdown
-from PyQt5.QtGui import QIcon, QFont, QFontMetrics
+from PyQt5.QtGui import QIcon, QFont, QFontMetrics, QPalette, QColor
 
 from src.utils.colors import Colors
 
@@ -359,6 +359,7 @@ DEFAULT_CONFIG = {
         "height": WIDTH_HEIGHT[1],
         "width": WIDTH_HEIGHT[0],
     },
+    "plugin_command_consent": {},  # plugin_name -> bool (user consent for external commands)
 }
 
 """
@@ -393,7 +394,7 @@ os.makedirs(CAP_DOWNLOAD_DIR, exist_ok=True)
 #
 # If you still need to skip certain .cap files, keep them here.
 #
-unsupported_apps = ["FIDO2.cap", "openjavacard-ndef-tiny.cap", "keycard.cap"]
+unsupported_apps = ["openjavacard-ndef-tiny.cap", "keycard.cap"]
 
 # AID prefix groups - apps sharing a prefix are mutually exclusive
 # When an installed AID starts with a group prefix, all available apps
@@ -906,8 +907,8 @@ class GPManagerApp(QMainWindow):
         self.installed_list.clearSelection()
         self.available_list.clearSelection()
 
-        # Remove the details pane widgets
-        for row in range(0, 3):
+        # Remove the details pane (single spanning widget in col 0)
+        for row in range(2):
             item = self.apps_grid_layout.itemAtPosition(row, 0)
             if item:
                 widget = item.widget()
@@ -918,8 +919,7 @@ class GPManagerApp(QMainWindow):
         # Restore the installed apps list
         self.apps_grid_layout.addWidget(QLabel("Installed Apps"), 0, 0)
         self.apps_grid_layout.addWidget(self.installed_list, 1, 0)
-        self.installed_list.show()  # Ensure visible after being hidden
-        # Row 2, col 0 stays empty - buttons are in details pane only
+        self.installed_list.show()
 
     def _on_app_selected(self, item, is_installed: bool):
         """Handle app selection from either installed or available list."""
@@ -946,80 +946,60 @@ class GPManagerApp(QMainWindow):
 
     def _show_app_details(self, app_name: str, is_installed: bool):
         """Show details pane with app info and contextual action buttons."""
-        # Check if we have a description for this app
         description = self.app_descriptions.get(app_name, "")
         display_name = self.app_display_names.get(app_name, app_name)
 
-        # Create content widget
+        # Single content widget that spans both grid rows in column 0
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 8)  # Add bottom margin
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        # content_layout.setSpacing(3)
 
-        # Header: App name with version (H1 style)
+        # Applet name label — plain QLabel, bold
         app_version = self._get_version_for_cap(app_name) if is_installed else None
         app_title = f"{display_name} (v{app_version})" if app_version else display_name
-        app_name_label = ElidingLabel(app_title)
-        # Use explicit QFont for reliable cross-platform sizing
-        app_font = QFont()
-        app_font.setPointSize(14)  # ~18px, using points for DPI independence
-        app_font.setBold(True)
-        app_name_label.setFont(app_font)
-        app_name_label.setMinimumWidth(100)
-        app_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        content_layout.addWidget(app_name_label)
+ 
 
-        # Header: Plugin name (subtitle style)
+        # Plugin name label — plain QLabel
         plugin_info = self.available_apps_info.get(app_name)
         if plugin_info:
-            plugin_name = plugin_info[0]
-            plugin_name_label = QLabel(f"Plugin: {plugin_name}")
-            # Use explicit QFont for reliable cross-platform sizing
-            plugin_font = QFont()
-            plugin_font.setPointSize(10)  # ~13px, using points for DPI independence
-            plugin_name_label.setFont(plugin_font)
-            plugin_name_label.setStyleSheet(f"color: {Colors.muted_text()};")
-            plugin_name_label.setWordWrap(False)
-            content_layout.addWidget(plugin_name_label)
 
-        # Small spacing before description
-        content_layout.addSpacing(8)
+            app_title += f" from {plugin_info[0]} plugin"
 
-        # Markdown viewer for description
+        app_name_label = QLabel(app_title)
+        content_layout.addWidget(app_name_label)
+
+        # Description viewer
+        viewer = QTextBrowser()
+        viewer.setOpenExternalLinks(True)
         if description:
-            viewer = QTextBrowser()
-            viewer.setOpenExternalLinks(True)
-            viewer.setHtml(markdown.markdown(textwrap.dedent(description)))
-            content_layout.addWidget(viewer)
-        else:
-            # No description - just add stretch
-            content_layout.addStretch()
+            html_body = markdown.markdown(textwrap.dedent(description))
+            styled_html = (
+                f"<style>"
+                f"body {{ color: {Colors.primary_text()}; margin: 0; }}"
+                f"a {{ color: {Colors.link()}; }}"
+                f"</style>"
+                f"{html_body}"
+            )
+            viewer.setHtml(styled_html)
+        content_layout.addWidget(viewer)
 
-        # Button container - auto-sizes to fit buttons
-        button_container = QWidget()
-        button_container_layout = QVBoxLayout(button_container)
-        button_container_layout.setContentsMargins(0, 8, 0, 8)
-
-        # Action buttons row
+        # Action buttons
         button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-
-        # Main action button (Install or Uninstall)
+        button_row.setContentsMargins(0, 4, 0, 0)
         if is_installed:
             action_btn = QPushButton("Uninstall")
             action_btn.clicked.connect(self.uninstall_app)
         else:
             action_btn = QPushButton("Install")
             action_btn.clicked.connect(self.install_app)
-
         action_btn.setEnabled(self._action_buttons_enabled)
         self._current_action_btn = action_btn
         button_row.addWidget(action_btn)
 
-        # Manage button (only if plugin has management UI)
         manage_btn = None
         if is_installed and self._plugin_has_management_ui(app_name):
             manage_btn = QPushButton("Manage")
-            # Capture app_name by value using default argument to avoid closure bug
             manage_btn.clicked.connect(lambda checked=False, name=app_name: self._show_management_dialog(name))
             manage_btn.setEnabled(self._action_buttons_enabled)
             self._current_manage_btn = manage_btn
@@ -1028,38 +1008,25 @@ class GPManagerApp(QMainWindow):
             self._current_manage_btn = None
 
         button_row.addStretch()
-
-        # Back button
         back_btn = QPushButton("Back")
         back_btn.clicked.connect(self.handle_details_pane_back)
         button_row.addWidget(back_btn)
+        content_layout.addLayout(button_row)
 
-        button_container_layout.addLayout(button_row)
-
-        content_layout.addWidget(button_container)
-
-        # Check if details pane is already showing
-        is_showing_details = (
-            self.apps_grid_layout.itemAtPosition(1, 0) and
-            self.apps_grid_layout.itemAtPosition(1, 0).widget() != self.installed_list
-        )
-
-        # Remove existing widgets in column 0
-        for row in range(0, 3):
+        # Remove existing column 0 widgets (header + list)
+        for row in range(2):
             item = self.apps_grid_layout.itemAtPosition(row, 0)
             if item:
                 widget = item.widget()
                 if widget:
                     self.apps_grid_layout.removeWidget(widget)
-                    # Don't orphan installed_list - we reuse it later
-                    # Orphaning a visible widget makes it a top-level window
                     if widget is self.installed_list:
-                        widget.hide()  # Hide but keep parented
+                        widget.hide()
                     else:
                         widget.setParent(None)
 
-        # Add the new content
-        self.apps_grid_layout.addWidget(content_widget, 0, 0, 3, 1)
+        # Place content widget spanning both rows of column 0
+        self.apps_grid_layout.addWidget(content_widget, 0, 0, 2, 1)
 
     def _get_disabled_plugins(self) -> set:
         """Get set of disabled plugin names."""
@@ -1137,7 +1104,9 @@ class GPManagerApp(QMainWindow):
                 dialog = plugin.create_management_dialog(
                     nfc_service=self.nfc_thread,
                     parent=self,
-                    installed_aid=installed_aid
+                    installed_aid=installed_aid,
+                    config=self.config,
+                    save_config=self.write_config,
                 )
                 if dialog:
                     dialog.exec_()

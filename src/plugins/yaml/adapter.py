@@ -100,6 +100,27 @@ class YamlPluginAdapter:
         """Return the underlying plugin schema."""
         return self._schema
 
+    def check_dependencies(self) -> list[str]:
+        """
+        Check if required external tools are available.
+
+        Returns:
+            List of warning messages for missing required dependencies.
+        """
+        from .dependencies import DependencyChecker
+
+        results = DependencyChecker.check_dependencies(self._schema.dependencies)
+        missing = DependencyChecker.get_missing_required(results)
+        warnings = []
+        for r in missing:
+            msg = f"Missing required command: {r.dependency.name}"
+            if r.dependency.description:
+                msg += f" ({r.dependency.description})"
+            if r.dependency.install_hint:
+                msg += f"\n  Install: {r.dependency.install_hint}"
+            warnings.append(msg)
+        return warnings
+
     def _get_cap_name(self) -> Optional[str]:
         """Get the CAP filename from the source definition."""
         source = self._schema.applet.source
@@ -734,7 +755,10 @@ class YamlPluginAdapter:
             for reader in self._schema.management_ui.state_readers
         ]
 
-    def create_management_dialog(self, nfc_service=None, parent=None, installed_aid=None):
+    def create_management_dialog(
+        self, nfc_service=None, parent=None, installed_aid=None,
+        config=None, save_config=None,
+    ):
         """
         Create a management dialog for this plugin.
 
@@ -745,6 +769,8 @@ class YamlPluginAdapter:
             nfc_service: NFC thread service for card communication
             parent: Parent widget
             installed_aid: The actual AID of the installed applet (from card)
+            config: App config dict (for command consent persistence)
+            save_config: Callback to save config after changes
 
         Returns:
             ManagementDialog or None if no management UI defined
@@ -827,6 +853,9 @@ class YamlPluginAdapter:
         # Get workflows if defined
         workflows = self._schema.workflows if self._schema.workflows else {}
 
+        # Check for missing external tool dependencies
+        dep_warnings = self.check_dependencies()
+
         return ManagementDialog(
             title=f"Manage {title_name}",
             actions=actions,
@@ -835,6 +864,10 @@ class YamlPluginAdapter:
             parent=parent,
             applet_aid=applet_aid,
             workflows=workflows,
+            plugin_name=self._schema.plugin.name,
+            config=config,
+            save_config=save_config,
+            dependency_warnings=dep_warnings,
         )
 
 

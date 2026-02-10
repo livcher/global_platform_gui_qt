@@ -119,6 +119,9 @@ class ConfigData:
     # Window configuration
     window: WindowConfig = field(default_factory=WindowConfig)
 
+    # Plugin command execution consent (plugin_name -> consented)
+    plugin_command_consent: Dict[str, bool] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -134,6 +137,7 @@ class ConfigData:
             },
             "known_tags": self.known_tags,  # Keep for rollback safety
             "window": self.window.to_dict(),
+            "plugin_command_consent": self.plugin_command_consent,
         }
 
     @classmethod
@@ -154,6 +158,7 @@ class ConfigData:
             known_cards=known_cards,
             known_tags=data.get("known_tags", {}),
             window=WindowConfig.from_dict(data.get("window", {})),
+            plugin_command_consent=data.get("plugin_command_consent", {}),
         )
 
     def get_plugin_cache(self, plugin_name: str) -> Optional[PluginCache]:
@@ -249,6 +254,18 @@ class ConfigData:
             cplc_hash=None,
             migrated_from_uid=False,
         )
+
+    def has_command_consent(self, plugin_name: str) -> bool:
+        """Check if user has consented to command execution for this plugin."""
+        return self.plugin_command_consent.get(plugin_name, False)
+
+    def grant_command_consent(self, plugin_name: str):
+        """Grant command execution consent for a plugin."""
+        self.plugin_command_consent[plugin_name] = True
+
+    def revoke_command_consent(self, plugin_name: str):
+        """Revoke command execution consent for a plugin."""
+        self.plugin_command_consent.pop(plugin_name, None)
 
     def upgrade_card_to_cplc(self, old_uid: str, cplc_hash: str) -> bool:
         """

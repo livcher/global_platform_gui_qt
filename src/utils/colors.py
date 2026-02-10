@@ -122,6 +122,46 @@ class Colors:
         return "#ffb74d" if cls._is_dark() else "#b58900"
 
     @classmethod
+    def card_bg(cls) -> str:
+        """Card/panel background (e.g., plugin items)."""
+        return "#383838" if cls._is_dark() else "#ffffff"
+
+    @classmethod
+    def card_border(cls) -> str:
+        """Card/panel border."""
+        return "#555" if cls._is_dark() else "#d0d0d0"
+
+    @classmethod
+    def card_hover_border(cls) -> str:
+        """Card/panel border on hover."""
+        return "#888" if cls._is_dark() else "#999"
+
+    @classmethod
+    def hover_bg(cls) -> str:
+        """Background on hover (buttons, tool buttons)."""
+        return "#505050" if cls._is_dark() else "#e0e0e0"
+
+    @classmethod
+    def alert_error_text(cls) -> str:
+        """Alert box error/danger text."""
+        return "#fca5a5" if cls._is_dark() else "#b91c1c"
+
+    @classmethod
+    def alert_error_bg(cls) -> str:
+        """Alert box error/danger background."""
+        return "#451a1a" if cls._is_dark() else "#fef2f2"
+
+    @classmethod
+    def alert_error_border(cls) -> str:
+        """Alert box error/danger border."""
+        return "#7f1d1d" if cls._is_dark() else "#fecaca"
+
+    @classmethod
+    def link(cls) -> str:
+        """Hyperlink color."""
+        return "#6cb4ee" if cls._is_dark() else "#1a73e8"
+
+    @classmethod
     def success(cls) -> str:
         """Success/valid color."""
         return "#81c784" if cls._is_dark() else "#4caf50"

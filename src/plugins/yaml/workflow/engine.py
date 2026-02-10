@@ -264,7 +264,12 @@ class WorkflowBuilder:
 
     def __init__(self):
         self._step_factories: dict[str, Callable] = {}
+        self._plugin_name: Optional[str] = None
         self._register_default_factories()
+
+    def set_plugin_name(self, name: str):
+        """Set plugin name for consent tracking in command steps."""
+        self._plugin_name = name
 
     def _register_default_factories(self):
         """Register the default step type factories."""
@@ -347,6 +352,7 @@ class WorkflowBuilder:
             description=step_def.description,
             depends_on=step_def.depends_on,
             capture_output=True,
+            plugin_name=self._plugin_name,
         )
 
     def _create_apdu_step(self, step_def: "WorkflowStep") -> BaseStep:

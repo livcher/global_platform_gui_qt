@@ -68,14 +68,17 @@ class SourceConfigPage(QWizardPage):
         self._local_radio = QRadioButton("Local File")
         self._http_radio = QRadioButton("HTTP/HTTPS URL")
         self._github_radio = QRadioButton("GitHub Release")
+        self._none_radio = QRadioButton("Management Only (no CAP file)")
 
         self._type_button_group.addButton(self._local_radio, 0)
         self._type_button_group.addButton(self._http_radio, 1)
         self._type_button_group.addButton(self._github_radio, 2)
+        self._type_button_group.addButton(self._none_radio, 3)
 
         type_layout.addWidget(self._local_radio)
         type_layout.addWidget(self._http_radio)
         type_layout.addWidget(self._github_radio)
+        type_layout.addWidget(self._none_radio)
 
         layout.addWidget(type_group)
 
@@ -186,6 +189,18 @@ class SourceConfigPage(QWizardPage):
         github_layout.addStretch()
         self._options_stack.addWidget(github_widget)
 
+        # Management-only options (no CAP file)
+        none_widget = QWidget()
+        none_layout = QVBoxLayout(none_widget)
+        none_layout.addWidget(QLabel(
+            "This plugin will not install any applet.\n\n"
+            "It provides management UI for applets that are already "
+            "installed on the card and match the compatible AIDs "
+            "you define on the Metadata page."
+        ))
+        none_layout.addStretch()
+        self._options_stack.addWidget(none_widget)
+
         layout.addWidget(self._options_stack)
 
         # Plugin definition discovery notification (hidden by default)
@@ -271,7 +286,10 @@ class SourceConfigPage(QWizardPage):
 
     def isComplete(self) -> bool:
         """Check if the page has valid data to proceed."""
-        if self._local_radio.isChecked():
+        if self._none_radio.isChecked():
+            return True  # Management-only: always complete
+
+        elif self._local_radio.isChecked():
             # Local: just need a path
             return bool(self._local_path_edit.text().strip())
 
@@ -328,6 +346,12 @@ class SourceConfigPage(QWizardPage):
                 # Mark as validated if URL exists
                 self._source_validated = True
                 self.completeChanged.emit()
+
+        elif source_type == "none":
+            self._none_radio.setChecked(True)
+            self._options_stack.setCurrentIndex(3)
+            self._source_validated = True
+            self.completeChanged.emit()
 
         elif source_type == "github_release":
             self._github_radio.setChecked(True)
@@ -821,7 +845,12 @@ class SourceConfigPage(QWizardPage):
         if not wizard:
             return True
 
-        if self._local_radio.isChecked():
+        if self._none_radio.isChecked():
+            wizard.set_plugin_data("applet.source.type", "none")
+            wizard.set_plugin_data("_selected_caps", [])
+            return True
+
+        elif self._local_radio.isChecked():
             path = self._local_path_edit.text().strip()
             if not path:
                 return False

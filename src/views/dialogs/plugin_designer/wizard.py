@@ -49,9 +49,11 @@ class PluginDesignerWizard(QWizard):
     3. Metadata - AID, storage requirements, mutual exclusions
     4. Variants (conditional) - Per-CAP naming when multiple CAPs selected
     5. UI Builder - Form fields for installation parameters
-    6. Action Builder - Management actions for installed applets
-    7. Workflow Builder - Multi-step workflows for complex operations
-    8. Preview - Final YAML preview with export option
+    6. Parameters - How form values are encoded into install params
+    7. Action Builder - Management actions for installed applets
+    8. Workflow Builder - Multi-step workflows for complex operations
+    9. Menu Items - Actions that appear in the Plugins menu bar
+    10. Preview - Final YAML preview with export option
     """
 
     plugin_created = pyqtSignal(str, str)  # yaml_content, save_path
@@ -62,9 +64,11 @@ class PluginDesignerWizard(QWizard):
     PAGE_METADATA = 2
     PAGE_VARIANTS = 3  # Only shown when multiple CAPs selected
     PAGE_UI_BUILDER = 4
-    PAGE_ACTION_BUILDER = 5
-    PAGE_WORKFLOW_BUILDER = 6
-    PAGE_PREVIEW = 7
+    PAGE_PARAMETERS = 5
+    PAGE_ACTION_BUILDER = 6
+    PAGE_WORKFLOW_BUILDER = 7
+    PAGE_MENU_ITEMS = 8
+    PAGE_PREVIEW = 9
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +93,7 @@ class PluginDesignerWizard(QWizard):
             "parameters": None,
             "management_ui": None,
             "workflows": None,
+            "menu_items": None,
         }
         self._original_path: Optional[str] = None
         self._has_changes = False
@@ -117,15 +122,23 @@ class PluginDesignerWizard(QWizard):
         from .ui_builder_page import UIBuilderPage
         self.setPage(self.PAGE_UI_BUILDER, UIBuilderPage(self))
 
-        # Page 6: Action Builder
+        # Page 6: Parameters
+        from .parameters_page import ParametersPage
+        self.setPage(self.PAGE_PARAMETERS, ParametersPage(self))
+
+        # Page 7: Action Builder
         from .action_builder_page import ActionBuilderPage
         self.setPage(self.PAGE_ACTION_BUILDER, ActionBuilderPage(self))
 
-        # Page 7: Workflow Builder
+        # Page 8: Workflow Builder
         from .workflow_builder_page import WorkflowBuilderPage
         self.setPage(self.PAGE_WORKFLOW_BUILDER, WorkflowBuilderPage(self))
 
-        # Page 8: Preview
+        # Page 9: Menu Items
+        from .menu_items_page import MenuItemsPage
+        self.setPage(self.PAGE_MENU_ITEMS, MenuItemsPage(self))
+
+        # Page 10: Preview
         self.setPage(self.PAGE_PREVIEW, PreviewPage(self))
 
     def _should_show_variants_page(self) -> bool:
@@ -265,6 +278,15 @@ class PluginDesignerWizard(QWizard):
         if "workflows" in plugin_data:
             self._plugin_data["workflows"] = plugin_data["workflows"]
 
+        if "dependencies" in plugin_data:
+            self._plugin_data["dependencies"] = plugin_data["dependencies"]
+
+        if "hooks" in plugin_data:
+            self._plugin_data["hooks"] = plugin_data["hooks"]
+
+        if "menu_items" in plugin_data:
+            self._plugin_data["menu_items"] = plugin_data["menu_items"]
+
         # Generate YAML
         yaml_content = self.generate_yaml()
 
@@ -369,6 +391,15 @@ class PluginDesignerWizard(QWizard):
 
             if "workflows" in plugin_data:
                 self._plugin_data["workflows"] = plugin_data["workflows"]
+
+            if "dependencies" in plugin_data:
+                self._plugin_data["dependencies"] = plugin_data["dependencies"]
+
+            if "hooks" in plugin_data:
+                self._plugin_data["hooks"] = plugin_data["hooks"]
+
+            if "menu_items" in plugin_data:
+                self._plugin_data["menu_items"] = plugin_data["menu_items"]
 
             # Generate YAML
             yaml_content = self.generate_yaml()
@@ -490,6 +521,15 @@ class PluginDesignerWizard(QWizard):
 
         if "workflows" in data:
             self._plugin_data["workflows"] = data["workflows"]
+
+        if "dependencies" in data:
+            self._plugin_data["dependencies"] = data["dependencies"]
+
+        if "hooks" in data:
+            self._plugin_data["hooks"] = data["hooks"]
+
+        if "menu_items" in data:
+            self._plugin_data["menu_items"] = data["menu_items"]
 
     def _get_user_plugins_dir(self) -> Path:
         """

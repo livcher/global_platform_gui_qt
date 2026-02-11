@@ -29,10 +29,11 @@ Looking for more information? Check out the [flexSecure repo docs](https://githu
 - Reports available memory (if app is installed)
 - Installs the latest version of an app
 - Can uninstall apps
-- **YAML Plugin System** - Create custom plugins with a visual designer
+- **YAML Plugin System** - Create custom plugins declaratively or with the visual designer wizard
   - Define applet sources (GitHub releases, HTTP, local files)
-  - Custom actions and workflows
-  - Parameter collection with validation
+  - Visual 10-page plugin designer wizard for point-and-click plugin creation
+  - Custom management actions, multi-step workflows, and menu items
+  - Parameter encoding (template, TLV, or custom Python script)
   - **Auto-discovery**: Repos with `gp-plugin.yaml` are automatically detected
 - Supports NDEF Installation
   - Container Size
@@ -170,28 +171,45 @@ applet:
     asset_pattern: "*.cap"  # Pattern to match CAP files in releases
 
   metadata:
-    aid: D276000085304A434F9001  # Package AID
-    storage_required: 10000      # Bytes required
+    name: My Applet
+    aid: D276000085304A434F9001  # Applet AID
+    storage:
+      persistent: 10000  # Bytes of persistent memory required
 
 # Optional: Custom installation UI
 install_ui:
-  fields:
-    - id: pin
-      label: "Initial PIN"
-      type: text
-      validation:
-        pattern: "^[0-9]{4,8}$"
-        message: "PIN must be 4-8 digits"
+  form:
+    fields:
+      - id: pin
+        label: "Initial PIN"
+        type: text
+        validation:
+          pattern: "^[0-9]{4,8}$"
+          message: "PIN must be 4-8 digits"
+
+# Optional: How form values become install params
+parameters:
+  encoding: template
+  template: "{pin_hex}"
 
 # Optional: Management actions for installed applet
 management_ui:
   actions:
     - id: change_pin
       label: "Change PIN"
-      type: apdu_sequence
-      apdu:
-        - "00 20 00 82 {old_pin}"
-        - "00 24 00 82 {new_pin}"
+      dialog:
+        fields:
+          - id: old_pin
+            type: password
+            label: "Current PIN"
+          - id: new_pin
+            type: password
+            label: "New PIN"
+      apdu_sequence:
+        - apdu: "0020008204{old_pin_hex}"
+          description: "Verifying current PIN..."
+        - apdu: "0024008204{new_pin_hex}"
+          description: "Setting new PIN..."
 ```
 
 When users point Global Platform GUI at your repository, it will detect the plugin definition and offer to import it automatically.
@@ -282,3 +300,5 @@ When a Fidesmo auth token is configured, the available apps list shows both Fide
 - [x] VivoKey Apex / Fidesmo support
 - [x] CAP file caching
 - [x] Export/backup of app config and secure storage
+- [x] YAML-based extensible plugin system
+- [x] Visual plugin designer wizard

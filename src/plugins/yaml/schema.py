@@ -15,6 +15,7 @@ class SourceType(str, Enum):
     HTTP = "http"
     LOCAL = "local"
     GITHUB_RELEASE = "github_release"
+    NONE = "none"  # Management-only plugin (no CAP to install)
 
 
 class FieldType(str, Enum):
@@ -192,6 +193,39 @@ class ManagementUIDefinition:
 
 
 # ============================================================================
+# Menu Item Definitions
+# ============================================================================
+
+class MenuActionType(str, Enum):
+    """Types of menu item actions."""
+    WORKFLOW = "workflow"
+    APDU_SEQUENCE = "apdu_sequence"
+    COMMAND = "command"
+    SCRIPT = "script"
+
+
+@dataclass
+class MenuItemAction:
+    """Action to execute when a menu item is triggered."""
+    type: MenuActionType
+    workflow: Optional[str] = None  # For type=workflow: workflow name reference
+    dialog: Optional[FormDefinition] = None  # Optional input dialog before execution
+    apdu_sequence: list[ApduCommand] = field(default_factory=list)  # For type=apdu_sequence
+    command: Optional[list[str]] = None  # For type=command
+    script: Optional[str] = None  # For type=script
+
+
+@dataclass
+class MenuItemDefinition:
+    """Definition of a plugin menu bar item."""
+    id: str
+    label: str
+    requires_card: bool = True
+    requires_applet: bool = True
+    action: Optional[MenuItemAction] = None
+
+
+# ============================================================================
 # Applet Source Definitions
 # ============================================================================
 
@@ -239,6 +273,7 @@ class AppletMetadata:
     storage: StorageRequirements = field(default_factory=StorageRequirements)
     mutual_exclusion: list[str] = field(default_factory=list)  # CAP files this conflicts with
     description: Optional[str] = None  # Markdown description
+    compatible_aids: list[str] = field(default_factory=list)  # AID prefixes for management matching
 
 
 @dataclass
@@ -386,6 +421,7 @@ class PluginSchema:
     workflows: dict[str, WorkflowDefinition] = field(default_factory=dict)
     hooks: Optional[HooksDefinition] = None
     dependencies: Optional[DependenciesDefinition] = None
+    menu_items: list[MenuItemDefinition] = field(default_factory=list)
 
     def get_aid(self) -> Optional[str]:
         """Get the static AID if defined."""
@@ -407,6 +443,18 @@ class PluginSchema:
             self.management_ui is not None and
             (len(self.management_ui.actions) > 0 or len(self.management_ui.state_readers) > 0)
         )
+
+    def get_compatible_aids(self) -> list[str]:
+        """Get compatible AID prefixes for management matching."""
+        return self.applet.metadata.compatible_aids
+
+    def is_management_only(self) -> bool:
+        """Check if this is a management-only plugin (no CAP to install)."""
+        return self.applet.source.type == SourceType.NONE
+
+    def has_menu_items(self) -> bool:
+        """Check if this plugin has menu bar items."""
+        return len(self.menu_items) > 0
 
     def get_workflow(self, name: str) -> Optional[WorkflowDefinition]:
         """Get a workflow by name."""

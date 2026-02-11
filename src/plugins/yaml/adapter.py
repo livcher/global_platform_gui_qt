@@ -180,6 +180,18 @@ class YamlPluginAdapter:
 
         return self._dialog
 
+    def is_management_only(self) -> bool:
+        """Check if this is a management-only plugin (no CAP to install)."""
+        return self._schema.is_management_only()
+
+    def matches_compatible_aid(self, raw_aid: str) -> bool:
+        """Check if an AID matches any of this plugin's compatible_aids prefixes."""
+        norm = raw_aid.upper().replace(" ", "")
+        for prefix in self._schema.get_compatible_aids():
+            if norm.startswith(prefix):
+                return True
+        return False
+
     def fetch_available_caps(self) -> dict[str, str]:
         """
         Return available CAP files with their download URLs.
@@ -187,6 +199,9 @@ class YamlPluginAdapter:
         Returns:
             Dict mapping cap_filename to download_url
         """
+        if self._schema.is_management_only():
+            return {}
+
         source = self._schema.applet.source
         result = {}
 
@@ -619,7 +634,7 @@ class YamlPluginAdapter:
         return self._schema.get_aid()
 
     def get_aid_list(self) -> list[str]:
-        """Get list of AIDs this plugin can handle."""
+        """Get list of AIDs this plugin can handle (including compatible_aids)."""
         aids = []
 
         # Collect per-variant AIDs (for multi-applet plugins)
@@ -627,22 +642,24 @@ class YamlPluginAdapter:
             if variant.aid:
                 aids.append(variant.aid)
 
-        # If we have variant AIDs, return those
-        if aids:
-            return aids
+        # If no variant AIDs, check for single static AID
+        if not aids:
+            aid = self._schema.get_aid()
+            if aid:
+                aids.append(aid)
 
-        # Otherwise, check for single static AID
-        aid = self._schema.get_aid()
-        if aid:
-            return [aid]
-
-        # For dynamic AIDs, return the base prefix
-        if self._schema.has_dynamic_aid():
+        # For dynamic AIDs, include the base prefix
+        if not aids and self._schema.has_dynamic_aid():
             base = self._schema.applet.metadata.aid_construction.base
             if base:
-                return [base]
+                aids.append(base)
 
-        return []
+        # Include compatible_aids prefixes
+        for compat in self._schema.get_compatible_aids():
+            if compat not in aids:
+                aids.append(compat)
+
+        return aids
 
     def get_cap_for_aid(self, raw_aid: str) -> Optional[str]:
         """
@@ -686,6 +703,12 @@ class YamlPluginAdapter:
                 if norm_aid.startswith(base_norm):
                     return get_best_cap_name()
 
+        # Check compatible_aids prefix match (only for install+manage plugins)
+        if not self._schema.is_management_only():
+            for prefix in self._schema.get_compatible_aids():
+                if norm_aid.startswith(prefix.upper()):
+                    return get_best_cap_name()
+
         return None
 
     def get_mutual_exclusions(self) -> list[str]:
@@ -695,6 +718,37 @@ class YamlPluginAdapter:
     def has_management_ui(self) -> bool:
         """Check if this plugin has management UI."""
         return self._schema.has_management_ui()
+
+    def has_menu_items(self) -> bool:
+        """Check if this plugin has menu bar items."""
+        return self._schema.has_menu_items()
+
+    def get_menu_items(self) -> list[dict]:
+        """Get list of menu item definitions."""
+        if not self._schema.has_menu_items():
+            return []
+
+        items = []
+        for item in self._schema.menu_items:
+            item_def = {
+                "id": item.id,
+                "label": item.label,
+                "requires_card": item.requires_card,
+                "requires_applet": item.requires_applet,
+            }
+            if item.action:
+                item_def["action_type"] = item.action.type.value
+                if item.action.workflow:
+                    item_def["workflow"] = item.action.workflow
+            items.append(item_def)
+        return items
+
+    def get_menu_item(self, item_id: str):
+        """Get a menu item definition by ID."""
+        for item in self._schema.menu_items:
+            if item.id == item_id:
+                return item
+        return None
 
     def get_management_actions(self) -> list[dict]:
         """Get list of management actions if defined."""

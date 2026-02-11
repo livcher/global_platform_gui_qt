@@ -31,6 +31,9 @@ from .schema import (
     InstallUIDefinition,
     ManagementAction,
     ManagementUIDefinition,
+    MenuActionType,
+    MenuItemAction,
+    MenuItemDefinition,
     ParameterDefinition,
     ParseType,
     PluginInfo,
@@ -198,6 +201,11 @@ class YamlPluginParser:
         if "dependencies" in data:
             dependencies = self._parse_dependencies(data["dependencies"])
 
+        menu_items = []
+        if "menu_items" in data:
+            for item_data in data["menu_items"]:
+                menu_items.append(self._parse_menu_item(item_data))
+
         return PluginSchema(
             schema_version=schema_version,
             plugin=plugin,
@@ -208,6 +216,7 @@ class YamlPluginParser:
             workflows=workflows,
             hooks=hooks,
             dependencies=dependencies,
+            menu_items=menu_items,
         )
 
     def _parse_plugin_info(self, data: dict) -> PluginInfo:
@@ -319,6 +328,19 @@ class YamlPluginParser:
                 transient=self._get(storage_data, "transient", 0),
             )
 
+        # Parse compatible_aids (AID prefixes for management matching)
+        compatible_aids = []
+        for aid_str in self._get(data, "compatible_aids", []):
+            normalized = str(aid_str).strip().upper().replace(" ", "")
+            if not re.match(r'^[0-9A-F]+$', normalized):
+                raise self._error(f"Invalid hex in compatible_aids: '{aid_str}'")
+            if len(normalized) < 6:
+                raise self._error(
+                    f"AID prefix too short in compatible_aids: '{aid_str}' "
+                    f"(minimum 3 bytes / 6 hex characters)"
+                )
+            compatible_aids.append(normalized)
+
         return AppletMetadata(
             name=name,
             aid=aid,
@@ -326,6 +348,7 @@ class YamlPluginParser:
             storage=storage,
             mutual_exclusion=self._get(data, "mutual_exclusion", []),
             description=self._get(data, "description"),
+            compatible_aids=compatible_aids,
         )
 
     def _parse_aid_construction(self, data: dict) -> AIDConstruction:
@@ -522,6 +545,73 @@ class YamlPluginParser:
             apdu_sequence=apdu_sequence,
             workflow=self._get(data, "workflow"),
             description=self._get(data, "description"),
+        )
+
+    def _parse_menu_item(self, data: dict) -> MenuItemDefinition:
+        """Parse a menu item definition."""
+        item_id = self._require(data, "id", "menu_items")
+        label = self._require(data, "label", f"menu_item '{item_id}'")
+
+        requires_card = bool(self._get(data, "requires_card", True))
+        requires_applet = bool(self._get(data, "requires_applet", True))
+
+        # Validate: requires_applet implies requires_card
+        if requires_applet and not requires_card:
+            raise self._error(
+                f"Menu item '{item_id}': requires_applet=true requires "
+                f"requires_card=true"
+            )
+
+        action = None
+        if "action" in data:
+            action_data = data["action"]
+            action_type_str = self._require(action_data, "type", f"menu_item '{item_id}' action")
+            try:
+                action_type = MenuActionType(action_type_str)
+            except ValueError:
+                raise self._error(
+                    f"Invalid action type '{action_type_str}' for menu_item '{item_id}'. "
+                    f"Valid types: {[t.value for t in MenuActionType]}"
+                )
+
+            # Parse optional dialog
+            dialog = None
+            if "dialog" in action_data:
+                dialog = self._parse_form(action_data["dialog"])
+
+            # Parse type-specific fields
+            apdu_sequence = []
+            for apdu_data in self._get(action_data, "apdu_sequence", []):
+                if isinstance(apdu_data, str):
+                    apdu_sequence.append(ApduCommand(apdu=apdu_data))
+                else:
+                    apdu_sequence.append(
+                        ApduCommand(
+                            apdu=self._require(apdu_data, "apdu", f"menu_item '{item_id}' apdu"),
+                            command=self._get(apdu_data, "command"),
+                            description=self._get(apdu_data, "description"),
+                        )
+                    )
+
+            command = self._get(action_data, "command")
+            if command is not None and not isinstance(command, list):
+                command = [str(command)]
+
+            action = MenuItemAction(
+                type=action_type,
+                workflow=self._get(action_data, "workflow"),
+                dialog=dialog,
+                apdu_sequence=apdu_sequence,
+                command=command,
+                script=self._get(action_data, "script"),
+            )
+
+        return MenuItemDefinition(
+            id=item_id,
+            label=label,
+            requires_card=requires_card,
+            requires_applet=requires_applet,
+            action=action,
         )
 
     def _parse_state_reader(self, data: dict) -> StateReader:

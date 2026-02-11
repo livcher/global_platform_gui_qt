@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QMenu,
 )
 
+from ...models.card import FIDESMO_KEY_SENTINEL
 from ...utils.colors import Colors
 
 
@@ -148,16 +149,19 @@ class ManageTagsDialog(QDialog):
                 if mode == "separate":
                     key_type += " (SCP03)"
             elif key:
-                # Infer from key length
-                key_len = len(key) // 2  # hex chars to bytes
-                if key_len == 16:
-                    key_type = "3DES/AES-128"
-                elif key_len == 24:
-                    key_type = "3DES-192/AES-192"
-                elif key_len == 32:
-                    key_type = "AES-256"
+                if key == FIDESMO_KEY_SENTINEL:
+                    key_type = "N/A"
                 else:
-                    key_type = f"{key_len} bytes"
+                    # Infer from key length
+                    key_len = len(key) // 2  # hex chars to bytes
+                    if key_len == 16:
+                        key_type = "3DES/AES-128"
+                    elif key_len == 24:
+                        key_type = "3DES-192/AES-192"
+                    elif key_len == 32:
+                        key_type = "AES-256"
+                    else:
+                        key_type = f"{key_len} bytes"
             else:
                 key_type = "-"
 

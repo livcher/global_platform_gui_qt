@@ -555,6 +555,12 @@ class GPManagerApp(QMainWindow):
         self._browse_store_action.triggered.connect(self._browse_fidesmo_store)
         self.fidesmo_menu.addAction(self._browse_store_action)
 
+        # Plugins menu (populated dynamically from plugin menu_items)
+        self.plugins_menu = self.menu_bar.addMenu("Plugins")
+        self._plugin_menu_actions = {}  # {plugin_name: {item_id: QAction}}
+        self._plugin_menu_item_defs = {}  # {plugin_name: {item_id: MenuItemDefinition}}
+        self.plugins_menu.menuAction().setVisible(False)  # Hidden until plugins populate it
+
         # Check Java availability for FDSM/Fidesmo support
         self._java_info = None
         self._fdsm_available = False
@@ -679,6 +685,8 @@ class GPManagerApp(QMainWindow):
         self.app_descriptions = {}
         self.app_display_names = {}  # {cap_name: display_name} - friendly names from metadata
         self.storage = {}
+        self.management_only_plugins = {}  # {plugin_name: plugin_instance}
+        self.compatible_aid_plugins = {}  # {installed_AID: (plugin_name, plugin_instance)}
         disabled_plugins = self._get_disabled_plugins()
         for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
             # Handle both class (Python plugins) and instance (YAML plugins)
@@ -687,6 +695,12 @@ class GPManagerApp(QMainWindow):
             else:
                 plugin_instance = plugin_cls_or_instance
             plugin_instance.load_storage()
+
+            # Management-only plugins have no CAP to install — skip fetching
+            if hasattr(plugin_instance, 'is_management_only') and plugin_instance.is_management_only():
+                self.management_only_plugins[plugin_name] = plugin_instance
+                continue
+
             # Check if cache needs to be invalidated for YAML plugins with variants
             cache_stale = (
                 not self.config["last_checked"].get(plugin_name, False)
@@ -783,6 +797,9 @@ class GPManagerApp(QMainWindow):
         # 3) Populate the "Available Apps" list
         #
         self.populate_available_list()
+
+        # 3b) Build Plugins menu from loaded plugins
+        self._build_plugins_menu()
 
         #
         # 4) Start NFC handler
@@ -1038,23 +1055,24 @@ class GPManagerApp(QMainWindow):
         Note: This allows managing apps even from disabled plugins,
         since the app is already installed on the card.
         """
-        if app_name not in self.available_apps_info:
-            return False
+        if app_name in self.available_apps_info:
+            plugin_name, _ = self.available_apps_info[app_name]
+            if plugin_name in self.plugin_map:
+                plugin = get_plugin_instance(self.plugin_map[plugin_name])
 
-        plugin_name, _ = self.available_apps_info[app_name]
-        if plugin_name not in self.plugin_map:
-            return False
+                if hasattr(plugin, 'has_management_ui'):
+                    return plugin.has_management_ui()
 
-        plugin = get_plugin_instance(self.plugin_map[plugin_name])
+                if hasattr(plugin, 'get_management_actions'):
+                    actions = plugin.get_management_actions()
+                    return len(actions) > 0
 
-        # Check for YAML plugin with management UI
-        if hasattr(plugin, 'has_management_ui'):
-            return plugin.has_management_ui()
-
-        # Check for Python plugin with management actions
-        if hasattr(plugin, 'get_management_actions'):
-            actions = plugin.get_management_actions()
-            return len(actions) > 0
+        # Fallback: check compatible_aid_plugins (management-only or broader compat)
+        norm = app_name.upper().replace(" ", "")
+        if norm in self.compatible_aid_plugins:
+            _, plugin = self.compatible_aid_plugins[norm]
+            if hasattr(plugin, 'has_management_ui'):
+                return plugin.has_management_ui()
 
         return False
 
@@ -1075,28 +1093,36 @@ class GPManagerApp(QMainWindow):
 
     def _show_management_dialog(self, app_name: str):
         """Show the management dialog for an installed app."""
-        if app_name not in self.available_apps_info:
-            self.message_queue.add_message(f"No plugin info for {app_name}")
-            return
-
-        plugin_name, _ = self.available_apps_info[app_name]
-        if plugin_name not in self.plugin_map:
-            self.message_queue.add_message(f"Plugin not found: {plugin_name}")
-            return
-
-        plugin = get_plugin_instance(self.plugin_map[plugin_name])
-
-        # Find the actual installed AID for this cap
+        plugin = None
         installed_aid = None
-        installed_apps = self.nfc_thread.get_installed_apps()
-        if installed_apps:
-            for raw_aid in installed_apps.keys():
-                # Check if this AID maps to the cap we're managing
-                if hasattr(plugin, 'get_cap_for_aid'):
-                    cap = plugin.get_cap_for_aid(raw_aid)
-                    if cap == app_name:
-                        installed_aid = raw_aid.replace(" ", "").upper()
-                        break
+
+        if app_name in self.available_apps_info:
+            # Standard path: plugin found via CAP matching
+            plugin_name, _ = self.available_apps_info[app_name]
+            if plugin_name not in self.plugin_map:
+                self.message_queue.add_message(f"Plugin not found: {plugin_name}")
+                return
+
+            plugin = get_plugin_instance(self.plugin_map[plugin_name])
+
+            # Find the actual installed AID for this cap
+            installed_apps = self.nfc_thread.get_installed_apps()
+            if installed_apps:
+                for raw_aid in installed_apps.keys():
+                    if hasattr(plugin, 'get_cap_for_aid'):
+                        cap = plugin.get_cap_for_aid(raw_aid)
+                        if cap == app_name:
+                            installed_aid = raw_aid.replace(" ", "").upper()
+                            break
+        else:
+            # Fallback: compatible_aid_plugins (management-only or broader compat)
+            norm = app_name.upper().replace(" ", "")
+            if norm in self.compatible_aid_plugins:
+                _, plugin = self.compatible_aid_plugins[norm]
+                installed_aid = norm
+            else:
+                self.message_queue.add_message(f"No plugin info for {app_name}")
+                return
 
         # Try to create management dialog
         if hasattr(plugin, 'create_management_dialog'):
@@ -1974,6 +2000,7 @@ class GPManagerApp(QMainWindow):
             self._loading_dialog.hide_loading()
             self._key_prompt_cancelled = False  # Reset flag when card is removed
             self._update_action_buttons_state(False)
+            self._update_plugin_menu_states(card_present=False)
             self.message_queue.add_message("No card present.")
 
     def _on_loading_timeout(self):
@@ -2292,6 +2319,7 @@ class GPManagerApp(QMainWindow):
         self.installed_list.clear()
         self.installed_app_names = []
         self.installed_aids = dict(installed_aids)  # Store for AID-based filtering
+        self.compatible_aid_plugins = {}  # Reset for fresh matching
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
@@ -2318,11 +2346,30 @@ class GPManagerApp(QMainWindow):
                     if matched_plugin_name:
                         break
 
+            # Second pass: check compatible_aids for unmatched AIDs
+            compat_plugin = None
+            if not matched_plugin_name:
+                for pname, plugin_cls_or_instance in self.plugin_map.items():
+                    tmp = get_plugin_instance(plugin_cls_or_instance)
+                    if hasattr(tmp, 'matches_compatible_aid') and tmp.matches_compatible_aid(raw_aid):
+                        compat_plugin = tmp
+                        matched_plugin_name = pname
+                        self.compatible_aid_plugins[norm] = (pname, tmp)
+                        break
+
             # Display either the display name or "Unknown"
             if matched_cap:
                 self.installed_app_names.append(matched_cap)
                 display_name = self.app_display_names.get(matched_cap, matched_cap)
                 display_text = display_name
+            elif compat_plugin:
+                # Compatible AID match — show the plugin's metadata name
+                meta_name = getattr(compat_plugin, '_schema', None)
+                if meta_name:
+                    display_text = meta_name.applet.metadata.name
+                else:
+                    display_text = matched_plugin_name
+                self.app_display_names[raw_aid] = display_text
             elif matched_plugin_name:
                 display_text = f"Unknown from {matched_plugin_name}: {raw_aid}"
                 matched_cap = None  # Ensure no cap stored for unknown apps
@@ -2380,6 +2427,9 @@ class GPManagerApp(QMainWindow):
         # Reset operation tracking
         self._last_operation = None
         self._pending_install_cap = None
+
+        # Update plugin menu item states based on detected AIDs
+        self._update_plugin_menu_states(card_present=True)
 
         self.on_operation_complete(True)
 
@@ -2625,6 +2675,289 @@ class GPManagerApp(QMainWindow):
             self.setWindowTitle(display_title)
         else:
             self.setWindowTitle(APP_TITLE)
+
+    # ──────────────────────────────────────────────────────────────────
+    #  Plugin Menu Bar
+    # ──────────────────────────────────────────────────────────────────
+
+    def _build_plugins_menu(self):
+        """Build the Plugins menu from loaded plugin menu_items definitions."""
+        self.plugins_menu.clear()
+        self._plugin_menu_actions = {}
+        self._plugin_menu_item_defs = {}
+
+        has_any = False
+        disabled_plugins = self._get_disabled_plugins()
+
+        for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
+            if plugin_name in disabled_plugins:
+                continue
+            plugin = get_plugin_instance(plugin_cls_or_instance)
+            if not hasattr(plugin, 'has_menu_items') or not plugin.has_menu_items():
+                continue
+
+            items = plugin.get_menu_items()
+            if not items:
+                continue
+
+            # Get a display name for the submenu
+            display_name = plugin_name
+            if hasattr(plugin, '_schema'):
+                display_name = plugin._schema.plugin.name or plugin_name
+
+            submenu = self.plugins_menu.addMenu(display_name)
+            self._plugin_menu_actions[plugin_name] = {}
+            self._plugin_menu_item_defs[plugin_name] = {}
+
+            for item in items:
+                item_id = item["id"]
+                action = QAction(item["label"], self)
+                # Disable card-requiring items by default (no card at startup)
+                if item.get("requires_card", True):
+                    action.setEnabled(False)
+                action.triggered.connect(
+                    lambda checked, pn=plugin_name, iid=item_id: self._on_plugin_menu_triggered(pn, iid)
+                )
+                submenu.addAction(action)
+                self._plugin_menu_actions[plugin_name][item_id] = action
+
+                # Store the schema-level definition for execution
+                menu_item_def = plugin.get_menu_item(item_id)
+                if menu_item_def:
+                    self._plugin_menu_item_defs[plugin_name][item_id] = menu_item_def
+
+            has_any = True
+
+        self.plugins_menu.menuAction().setVisible(has_any)
+
+    def _update_plugin_menu_states(self, card_present: bool = False):
+        """Update enable/disable state of plugin menu actions based on card state."""
+        for plugin_name, actions in self._plugin_menu_actions.items():
+            plugin = get_plugin_instance(self.plugin_map.get(plugin_name))
+            if not plugin:
+                continue
+
+            # Check if any installed AID matches this plugin
+            applet_detected = False
+            if card_present and self.installed_aids:
+                for raw_aid in self.installed_aids:
+                    if hasattr(plugin, 'get_cap_for_aid') and plugin.get_cap_for_aid(raw_aid):
+                        applet_detected = True
+                        break
+                    if hasattr(plugin, 'matches_compatible_aid') and plugin.matches_compatible_aid(raw_aid):
+                        applet_detected = True
+                        break
+
+            for item_id, qaction in actions.items():
+                item_def = self._plugin_menu_item_defs.get(plugin_name, {}).get(item_id)
+                if not item_def:
+                    continue
+
+                if not item_def.requires_card:
+                    qaction.setEnabled(True)
+                elif not card_present:
+                    qaction.setEnabled(False)
+                elif item_def.requires_applet:
+                    qaction.setEnabled(applet_detected)
+                else:
+                    qaction.setEnabled(True)
+
+    def _on_plugin_menu_triggered(self, plugin_name: str, item_id: str):
+        """Handle a plugin menu item being triggered."""
+        plugin = get_plugin_instance(self.plugin_map.get(plugin_name))
+        if not plugin:
+            return
+
+        item_def = self._plugin_menu_item_defs.get(plugin_name, {}).get(item_id)
+        if not item_def or not item_def.action:
+            return
+
+        action = item_def.action
+        action_type = action.type.value
+
+        # Collect dialog parameters if action has a dialog
+        parameters = {}
+        if action.dialog and action.dialog.fields:
+            from src.plugins.yaml.ui.dialog_builder import DialogBuilder
+            dialog = DialogBuilder.build_from_form(
+                action.dialog, title=item_def.label, parent=self,
+            )
+            if not dialog:
+                return
+            if dialog.exec_() != dialog.Accepted:
+                return
+            parameters = dialog.getValues()
+
+        if action_type == "workflow":
+            self._execute_plugin_menu_workflow(plugin, plugin_name, action, parameters)
+        elif action_type == "apdu_sequence":
+            self._execute_plugin_menu_apdu(plugin, plugin_name, action, parameters)
+        elif action_type == "command":
+            self._execute_plugin_menu_command(plugin_name, action, parameters)
+        elif action_type == "script":
+            self._execute_plugin_menu_script(action, parameters)
+
+    def _execute_plugin_menu_workflow(self, plugin, plugin_name, action, parameters):
+        """Execute a workflow-type menu action."""
+        workflow_name = action.workflow
+        if not workflow_name:
+            QMessageBox.warning(self, "Error", "No workflow specified.")
+            return
+
+        workflow_def = None
+        if hasattr(plugin, '_schema'):
+            workflow_def = plugin._schema.get_workflow(workflow_name)
+        if not workflow_def:
+            QMessageBox.warning(self, "Error", f"Workflow '{workflow_name}' not found.")
+            return
+
+        try:
+            from src.plugins.yaml.workflow.engine import WorkflowBuilder, WorkflowContext
+
+            builder = WorkflowBuilder()
+            builder.set_plugin_name(plugin_name)
+
+            def progress_callback(message, percent):
+                pass  # Could show a status bar update
+
+            engine = builder.build_workflow(workflow_def, progress_callback)
+
+            context = WorkflowContext(initial_values=parameters)
+            context.register_service("nfc_thread", self.nfc_thread)
+
+            # Register consent service for command steps
+            from src.plugins.yaml.workflow.steps.command_step import ConsentService
+            consent_service = ConsentService(
+                config=self.config,
+                save_config=self.write_config,
+                parent=self,
+            )
+            context.register_service("consent_service", consent_service)
+
+            results = engine.execute(context=context, initial_values=parameters)
+
+            # Check results
+            all_ok = all(r.success for r in results.values())
+            if all_ok:
+                QMessageBox.information(self, "Success", "Workflow completed successfully.")
+            else:
+                failed = [sid for sid, r in results.items() if not r.success]
+                QMessageBox.warning(self, "Workflow Failed", f"Failed steps: {', '.join(failed)}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Workflow execution failed:\n{e}")
+
+    def _execute_plugin_menu_apdu(self, plugin, plugin_name, action, parameters):
+        """Execute an APDU sequence menu action."""
+        if not action.apdu_sequence:
+            QMessageBox.warning(self, "Error", "No APDU sequence defined.")
+            return
+
+        try:
+            from src.plugins.yaml.encoding.encoder import TemplateProcessor
+
+            errors = []
+            for i, apdu_cmd in enumerate(action.apdu_sequence):
+                apdu_template = apdu_cmd.apdu
+                description = apdu_cmd.description or f"Step {i+1}"
+
+                # Process template variables
+                processed_apdu = TemplateProcessor.process(apdu_template, parameters)
+
+                # Send APDU
+                response = self.nfc_thread.send_apdu_and_wait(processed_apdu)
+                if response is None:
+                    errors.append(f"{description}: No response")
+                    break
+
+            if errors:
+                QMessageBox.warning(self, "APDU Error", "\n".join(errors))
+            else:
+                QMessageBox.information(self, "Success", "APDU sequence completed.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"APDU execution failed:\n{e}")
+
+    def _execute_plugin_menu_command(self, plugin_name, action, parameters):
+        """Execute a command-type menu action."""
+        import subprocess as sp
+        if not action.command:
+            QMessageBox.warning(self, "Error", "No command defined.")
+            return
+
+        try:
+            from src.plugins.yaml.encoding.encoder import TemplateProcessor
+
+            # Process template variables in command args
+            processed_cmd = [TemplateProcessor.process(arg, parameters) for arg in action.command]
+
+            # Show consent dialog
+            from src.views.dialogs.command_consent_dialog import CommandConsentDialog
+            consent_dialog = CommandConsentDialog(
+                plugin_name=plugin_name,
+                command=processed_cmd,
+                parent=self,
+            )
+            if consent_dialog.exec_() != consent_dialog.Accepted:
+                return
+
+            # Execute command using subprocess.run with explicit args (no shell)
+            result = sp.run(
+                processed_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=sp.CREATE_NO_WINDOW if hasattr(sp, 'CREATE_NO_WINDOW') else 0,
+            )
+
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                if output:
+                    QMessageBox.information(self, "Command Output", output)
+                else:
+                    QMessageBox.information(self, "Success", "Command completed successfully.")
+            else:
+                QMessageBox.warning(
+                    self, "Command Failed",
+                    f"Exit code: {result.returncode}\n{result.stderr.strip()}"
+                )
+
+        except sp.TimeoutExpired:
+            QMessageBox.warning(self, "Timeout", "Command timed out after 30 seconds.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Command execution failed:\n{e}")
+
+    def _execute_plugin_menu_script(self, action, parameters):
+        """Execute a script-type menu action."""
+        if not action.script:
+            QMessageBox.warning(self, "Error", "No script defined.")
+            return
+
+        try:
+            safe_globals = {"__builtins__": {
+                "len": len, "str": str, "int": int, "float": float,
+                "bool": bool, "list": list, "dict": dict, "tuple": tuple,
+                "hex": hex, "bytes": bytes, "bytearray": bytearray,
+                "range": range, "enumerate": enumerate, "zip": zip,
+                "print": print, "isinstance": isinstance, "type": type,
+            }}
+            local_vars = {"parameters": parameters, "result": None}
+
+            exec(action.script, safe_globals, local_vars)
+
+            result = local_vars.get("result")
+            if result is not None:
+                QMessageBox.information(self, "Script Result", str(result))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Script execution failed:\n{e}")
+
+    def _rebuild_plugins_menu(self):
+        """Rebuild the Plugins menu (e.g., after settings change)."""
+        self._build_plugins_menu()
+        # Re-apply current card state
+        card_present = hasattr(self, 'nfc_thread') and self.nfc_thread.valid_card_detected
+        self._update_plugin_menu_states(card_present=card_present)
 
     def _check_java_for_fdsm(self):
         """Check Java installation and version for FDSM/Fidesmo support."""

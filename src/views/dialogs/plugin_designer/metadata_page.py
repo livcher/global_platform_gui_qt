@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QRadioButton,
     QComboBox,
+    QInputDialog,
 )
 
 from ....utils.colors import Colors
@@ -208,6 +209,33 @@ class MetadataPage(QWizardPage):
 
         layout.addWidget(exclusion_group)
 
+        # Compatible AIDs
+        compat_group = QGroupBox("Compatible AIDs (optional)")
+        compat_layout = QVBoxLayout(compat_group)
+
+        compat_layout.addWidget(QLabel(
+            "AID prefixes of applets this plugin can manage.\n"
+            "Allows managing applets installed by other plugins or vendors."
+        ))
+
+        self._compat_list = QListWidget()
+        self._compat_list.setMaximumHeight(100)
+        compat_layout.addWidget(self._compat_list)
+
+        compat_btn_layout = QHBoxLayout()
+        compat_add_btn = QPushButton("Add")
+        compat_add_btn.clicked.connect(self._add_compatible_aid)
+        compat_btn_layout.addWidget(compat_add_btn)
+
+        compat_remove_btn = QPushButton("Remove")
+        compat_remove_btn.clicked.connect(self._remove_compatible_aid)
+        compat_btn_layout.addWidget(compat_remove_btn)
+
+        compat_btn_layout.addStretch()
+        compat_layout.addLayout(compat_btn_layout)
+
+        layout.addWidget(compat_group)
+
         layout.addStretch()
 
     def _validate_aid(self, text: str):
@@ -250,6 +278,36 @@ class MetadataPage(QWizardPage):
         current = self._exclusion_list.currentItem()
         if current:
             self._exclusion_list.takeItem(self._exclusion_list.row(current))
+
+    def _add_compatible_aid(self):
+        """Add a compatible AID prefix."""
+        text, ok = QInputDialog.getText(
+            self,
+            "Add Compatible AID Prefix",
+            "Enter an AID prefix (hex, at least 6 characters):",
+        )
+        if ok and text:
+            aid = text.strip().upper().replace(" ", "")
+            if not re.match(r'^[0-9A-F]+$', aid):
+                QMessageBox.warning(self, "Invalid", "Must contain only hex characters (0-9, A-F).")
+                return
+            if len(aid) < 6:
+                QMessageBox.warning(self, "Too Short", "AID prefix must be at least 3 bytes (6 hex characters).")
+                return
+            if len(aid) % 2 != 0:
+                QMessageBox.warning(self, "Invalid", "AID prefix must have an even number of characters.")
+                return
+            for i in range(self._compat_list.count()):
+                if self._compat_list.item(i).text() == aid:
+                    QMessageBox.warning(self, "Duplicate", "This AID prefix is already in the list.")
+                    return
+            self._compat_list.addItem(aid)
+
+    def _remove_compatible_aid(self):
+        """Remove selected compatible AID prefix."""
+        current = self._compat_list.currentItem()
+        if current:
+            self._compat_list.takeItem(self._compat_list.row(current))
 
     def initializePage(self):
         """Initialize with data from wizard."""
@@ -342,6 +400,12 @@ class MetadataPage(QWizardPage):
             for excl in exclusions:
                 self._exclusion_list.addItem(excl)
 
+        # Load compatible_aids
+        compatible_aids = wizard.get_plugin_value("applet.metadata.compatible_aids", [])
+        if compatible_aids and self._compat_list.count() == 0:
+            for aid_prefix in compatible_aids:
+                self._compat_list.addItem(aid_prefix)
+
         # Try to use extracted CAP metadata (for new plugins)
         extracted = wizard.get_plugin_value("_extracted_metadata")
         if extracted and not self._aid_edit.text():
@@ -367,12 +431,19 @@ class MetadataPage(QWizardPage):
         selected_caps = wizard.get_plugin_value("_selected_caps", [])
         has_multiple_caps = len(selected_caps) > 1
 
+        # Check if management-only plugin
+        source_type = wizard.get_plugin_value("applet.source.type", "")
+        is_management_only = source_type == "none"
+
         # AID validation with user feedback
         aid = self._aid_edit.text().replace(" ", "").upper()
 
         # For multi-variant plugins, AID is optional (each variant has its own)
         if not aid and has_multiple_caps:
             # Skip AID validation entirely - per-variant AIDs are set on variants page
+            pass
+        elif not aid and is_management_only:
+            # Management-only plugins don't have their own AID
             pass
         elif not aid:
             # Single-variant plugin requires AID
@@ -444,6 +515,25 @@ class MetadataPage(QWizardPage):
                 exclusions.append(item.text())
         if exclusions:
             wizard.set_plugin_data("applet.metadata.mutual_exclusion", exclusions)
+
+        # Compatible AIDs
+        compatible_aids = []
+        for i in range(self._compat_list.count()):
+            item = self._compat_list.item(i)
+            if item:
+                compatible_aids.append(item.text())
+        if compatible_aids:
+            wizard.set_plugin_data("applet.metadata.compatible_aids", compatible_aids)
+
+        # Management-only plugins must have at least one compatible AID
+        if is_management_only and not compatible_aids:
+            QMessageBox.warning(
+                self,
+                "Compatible AIDs Required",
+                "Management-only plugins must declare at least one compatible AID prefix.\n\n"
+                "This tells the plugin which installed applets it can manage.",
+            )
+            return False
 
         return True
 

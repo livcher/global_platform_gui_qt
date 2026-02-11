@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QCheckBox,
     QSplitter,
+    QSpinBox,
     QWidget,
     QTabWidget,
     QTreeWidget,
@@ -44,6 +45,7 @@ class WorkflowStepDialog(QDialog):
 
     STEP_TYPES = [
         ("apdu", "APDU Command"),
+        ("command", "Shell Command"),
         ("dialog", "User Dialog"),
         ("script", "Python Script"),
         ("confirmation", "Confirmation"),
@@ -133,6 +135,10 @@ class WorkflowStepDialog(QDialog):
         self._apdu_desc_edit.setPlaceholderText("Verifying PIN...")
         apdu_layout.addRow("Description:", self._apdu_desc_edit)
 
+        self._apdu_sw_edit = QLineEdit()
+        self._apdu_sw_edit.setPlaceholderText("e.g., 9000 (leave empty to accept any)")
+        apdu_layout.addRow("Expected SW:", self._apdu_sw_edit)
+
         self._config_layout.addWidget(self._apdu_group)
 
         # Dialog config
@@ -178,6 +184,35 @@ class WorkflowStepDialog(QDialog):
 
         self._config_layout.addWidget(self._confirm_group)
 
+        # Command config
+        self._command_group = QGroupBox("Command Configuration")
+        command_layout = QFormLayout(self._command_group)
+
+        self._command_exec_edit = QLineEdit()
+        self._command_exec_edit.setPlaceholderText("e.g., yktool, openssl, gpg")
+        command_layout.addRow("Command:", self._command_exec_edit)
+
+        self._command_args_edit = QLineEdit()
+        self._command_args_edit.setPlaceholderText("e.g., --write-cert {cert_file}")
+        command_layout.addRow("Arguments:", self._command_args_edit)
+
+        self._command_timeout_spin = QSpinBox()
+        self._command_timeout_spin.setRange(5, 300)
+        self._command_timeout_spin.setValue(60)
+        self._command_timeout_spin.setSuffix(" seconds")
+        command_layout.addRow("Timeout:", self._command_timeout_spin)
+
+        cmd_hint = QLabel(
+            "Command and arguments are executed as a separate process.\n"
+            "Use {variable} for template substitution.\n"
+            "A consent dialog will be shown to the user on first run."
+        )
+        cmd_hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
+        cmd_hint.setWordWrap(True)
+        command_layout.addRow("", cmd_hint)
+
+        self._config_layout.addWidget(self._command_group)
+
         left_layout.addWidget(self._config_stack)
 
         # Show appropriate config for default type
@@ -199,7 +234,7 @@ class WorkflowStepDialog(QDialog):
         self._vars_tree.itemDoubleClicked.connect(self._insert_variable)
         vars_layout.addWidget(self._vars_tree)
 
-        hint = QLabel("Use {variable_id} in APDU templates\nor context.get('variable_id') in scripts")
+        hint = QLabel("Use {variable_id} in APDU/command templates\nor context.get('variable_id') in scripts")
         hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
         hint.setWordWrap(True)
         vars_layout.addWidget(hint)
@@ -266,6 +301,7 @@ class WorkflowStepDialog(QDialog):
         step_type = self._type_combo.currentData()
 
         self._apdu_group.setVisible(step_type == "apdu")
+        self._command_group.setVisible(step_type == "command")
         self._dialog_group.setVisible(step_type == "dialog")
         self._script_group.setVisible(step_type == "script")
         self._confirm_group.setVisible(step_type == "confirmation")
@@ -338,6 +374,15 @@ class WorkflowStepDialog(QDialog):
             cursor.insertText(f"context.get('{var_id}')")
             self._script_edit.setFocus()
 
+        elif step_type == "command":
+            # Insert as template variable in arguments field
+            current = self._command_args_edit.text()
+            cursor_pos = self._command_args_edit.cursorPosition()
+            new_text = current[:cursor_pos] + "{" + var_id + "}" + current[cursor_pos:]
+            self._command_args_edit.setText(new_text)
+            self._command_args_edit.setCursorPosition(cursor_pos + len(var_id) + 2)
+            self._command_args_edit.setFocus()
+
         elif step_type == "confirmation":
             # Insert as template variable in message
             current = self._confirm_message_edit.text()
@@ -383,6 +428,19 @@ class WorkflowStepDialog(QDialog):
         if step_type == "apdu":
             self._apdu_edit.setText(self._step_data.get("apdu", ""))
             self._apdu_desc_edit.setText(self._step_data.get("description", ""))
+            sw = self._step_data.get("expected_sw", "")
+            if isinstance(sw, list):
+                sw = sw[0] if sw else ""
+            self._apdu_sw_edit.setText(str(sw))
+
+        elif step_type == "command":
+            cmd = self._step_data.get("command", [])
+            if isinstance(cmd, list) and cmd:
+                self._command_exec_edit.setText(cmd[0])
+                self._command_args_edit.setText(" ".join(cmd[1:]))
+            elif isinstance(cmd, str):
+                self._command_exec_edit.setText(cmd)
+            self._command_timeout_spin.setValue(self._step_data.get("timeout", 60))
 
         elif step_type == "dialog":
             self._fields = self._step_data.get("fields", []).copy()
@@ -445,6 +503,20 @@ class WorkflowStepDialog(QDialog):
             desc = self._apdu_desc_edit.text().strip()
             if desc:
                 data["description"] = desc
+            sw = self._apdu_sw_edit.text().strip()
+            if sw:
+                data["expected_sw"] = sw
+
+        elif step_type == "command":
+            executable = self._command_exec_edit.text().strip()
+            args_text = self._command_args_edit.text().strip()
+            cmd_list = [executable] if executable else []
+            if args_text:
+                cmd_list.extend(args_text.split())
+            data["command"] = cmd_list
+            timeout = self._command_timeout_spin.value()
+            if timeout != 60:
+                data["timeout"] = timeout
 
         elif step_type == "dialog":
             if self._fields:
@@ -780,11 +852,43 @@ class WorkflowBuilderPage(QWizardPage):
         # Help text
         help_label = QLabel(
             "Workflows are referenced by management actions and can include "
-            "APDU commands, user dialogs, Python scripts, and confirmations."
+            "APDU commands, shell commands, user dialogs, Python scripts, and confirmations."
         )
         help_label.setWordWrap(True)
         help_label.setStyleSheet(f"color: {Colors.muted_text()};")
         layout.addWidget(help_label)
+
+        # Dependencies section
+        deps_group = QGroupBox("External Tool Dependencies (optional)")
+        deps_layout = QVBoxLayout(deps_group)
+
+        deps_hint = QLabel(
+            "Declare external tools your plugin needs. "
+            "Users will see warnings if tools are missing."
+        )
+        deps_hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
+        deps_hint.setWordWrap(True)
+        deps_layout.addWidget(deps_hint)
+
+        self._deps_list = QListWidget()
+        self._deps_list.setMaximumHeight(80)
+        deps_layout.addWidget(self._deps_list)
+
+        deps_btn_layout = QHBoxLayout()
+        deps_add_btn = QPushButton("Add...")
+        deps_add_btn.clicked.connect(self._add_dependency)
+        deps_btn_layout.addWidget(deps_add_btn)
+
+        deps_remove_btn = QPushButton("Remove")
+        deps_remove_btn.clicked.connect(self._remove_dependency)
+        deps_btn_layout.addWidget(deps_remove_btn)
+
+        deps_btn_layout.addStretch()
+        deps_layout.addLayout(deps_btn_layout)
+
+        layout.addWidget(deps_group)
+
+        self._dependencies: list[dict] = []
 
         # Workflows list
         layout.addWidget(QLabel("Defined Workflows:"))
@@ -818,7 +922,7 @@ class WorkflowBuilderPage(QWizardPage):
         layout.addWidget(self._skip_check)
 
     def initializePage(self):
-        """Load existing workflows when editing."""
+        """Load existing workflows and dependencies when editing."""
         wizard = self.wizard()
         if not wizard:
             return
@@ -833,6 +937,13 @@ class WorkflowBuilderPage(QWizardPage):
         # Always update list to ensure UI reflects current state
         if self._workflows:
             self._update_list()
+
+        # Load dependencies
+        deps = wizard.get_plugin_value("dependencies", {})
+        if deps and not self._dependencies:
+            import copy
+            self._dependencies = copy.deepcopy(deps.get("commands", []))
+            self._update_deps_list()
 
     def _on_skip_changed(self, state):
         """Handle skip checkbox change."""
@@ -944,6 +1055,36 @@ class WorkflowBuilderPage(QWizardPage):
             item.setData(Qt.UserRole, workflow_id)
             self._workflows_list.addItem(item)
 
+    def _add_dependency(self):
+        """Add a tool dependency."""
+        dialog = DependencyDialog(parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            dep_data = dialog.get_data()
+            if dep_data.get("name"):
+                self._dependencies.append(dep_data)
+                self._update_deps_list()
+
+    def _remove_dependency(self):
+        """Remove selected dependency."""
+        current = self._deps_list.currentRow()
+        if 0 <= current < len(self._dependencies):
+            self._dependencies.pop(current)
+            self._update_deps_list()
+
+    def _update_deps_list(self):
+        """Update the dependencies list display."""
+        self._deps_list.clear()
+        for dep in self._dependencies:
+            name = dep.get("name", "?")
+            desc = dep.get("description", "")
+            required = dep.get("required", True)
+            label = name
+            if desc:
+                label += f" - {desc}"
+            if not required:
+                label += " (optional)"
+            self._deps_list.addItem(label)
+
     def validatePage(self) -> bool:
         """Validate and save data."""
         wizard = self.wizard()
@@ -955,4 +1096,80 @@ class WorkflowBuilderPage(QWizardPage):
         else:
             wizard.set_plugin_data("workflows", self._workflows)
 
+        # Save dependencies
+        if self._dependencies:
+            wizard.set_plugin_data("dependencies", {"commands": self._dependencies})
+        else:
+            wizard.set_plugin_data("dependencies", None)
+
         return True
+
+
+class DependencyDialog(QDialog):
+    """Dialog for adding an external tool dependency."""
+
+    def __init__(self, dep_data: Optional[dict] = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Tool Dependency")
+        self.setMinimumWidth(400)
+
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g., yktool")
+        form.addRow("Command name:", self._name_edit)
+
+        name_hint = QLabel("As it appears in PATH")
+        name_hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
+        form.addRow("", name_hint)
+
+        self._desc_edit = QLineEdit()
+        self._desc_edit.setPlaceholderText("e.g., YubiKey management tool")
+        form.addRow("Description:", self._desc_edit)
+
+        self._hint_edit = QLineEdit()
+        self._hint_edit.setPlaceholderText("e.g., https://github.com/...")
+        form.addRow("Install hint:", self._hint_edit)
+
+        self._required_cb = QCheckBox("Required")
+        self._required_cb.setChecked(True)
+        form.addRow("", self._required_cb)
+
+        layout.addLayout(form)
+
+        # Load existing data
+        if dep_data:
+            self._name_edit.setText(dep_data.get("name", ""))
+            self._desc_edit.setText(dep_data.get("description", ""))
+            self._hint_edit.setText(dep_data.get("install_hint", ""))
+            self._required_cb.setChecked(dep_data.get("required", True))
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        if not self._name_edit.text().strip():
+            QMessageBox.warning(
+                self, "Name Required", "Please enter a command name."
+            )
+            self._name_edit.setFocus()
+            return
+        self.accept()
+
+    def get_data(self) -> dict:
+        data = {"name": self._name_edit.text().strip()}
+        desc = self._desc_edit.text().strip()
+        if desc:
+            data["description"] = desc
+        hint = self._hint_edit.text().strip()
+        if hint:
+            data["install_hint"] = hint
+        if not self._required_cb.isChecked():
+            data["required"] = False
+        return data

@@ -76,7 +76,106 @@ class GeneralTab(QWidget):
         debug_layout.addWidget(debug_desc)
 
         layout.addWidget(debug_group)
+
+        # GlobalPlatform Pro version group
+        gp_group = QGroupBox("GlobalPlatform Pro")
+        gp_layout = QVBoxLayout(gp_group)
+
+        gp_desc = QLabel(
+            "Select a different version of GlobalPlatformPro (gp.jar) to use "
+            "for card operations. Versions are fetched from GitHub releases."
+        )
+        gp_desc.setStyleSheet(f"color: {Colors.muted_text()};")
+        gp_desc.setWordWrap(True)
+        gp_layout.addWidget(gp_desc)
+
+        version_row = QHBoxLayout()
+        version_row.addWidget(QLabel("Version:"))
+        self._gp_version_combo = QComboBox()
+        # Detect built-in version for display
+        self._gp_builtin_label = "Built-in"
+        try:
+            from src.services.tool_version_service import ToolVersionService
+            gp_ver = ToolVersionService.detect_bundled_gp_version()
+            if gp_ver:
+                self._gp_builtin_label = f"Built-in ({gp_ver})"
+        except Exception:
+            pass
+        self._gp_version_combo.addItem(self._gp_builtin_label, None)
+        # If config has a previously selected version, add and select it
+        current_gp = self._config.get("custom_gp_version")
+        if current_gp:
+            self._gp_version_combo.addItem(current_gp, current_gp)
+            self._gp_version_combo.setCurrentIndex(1)
+        self._gp_version_combo.currentIndexChanged.connect(
+            lambda: self.settings_changed.emit()
+        )
+        version_row.addWidget(self._gp_version_combo, 1)
+
+        self._gp_refresh_btn = QPushButton("Refresh")
+        self._gp_refresh_btn.setToolTip("Fetch available versions from GitHub")
+        self._gp_refresh_btn.clicked.connect(self._on_refresh_gp_versions)
+        version_row.addWidget(self._gp_refresh_btn)
+        gp_layout.addLayout(version_row)
+
+        self._gp_status_label = QLabel("")
+        self._gp_status_label.setStyleSheet(f"color: {Colors.muted_text()};")
+        gp_layout.addWidget(self._gp_status_label)
+
+        layout.addWidget(gp_group)
         layout.addStretch()
+
+        # Internal cache of fetched releases
+        self._gp_releases = {}
+
+    def _on_refresh_gp_versions(self):
+        """Fetch GP releases from GitHub and populate the dropdown."""
+        self._gp_refresh_btn.setEnabled(False)
+        self._gp_status_label.setText("Fetching releases from GitHub...")
+        QApplication.processEvents()
+
+        try:
+            from src.services.tool_version_service import (
+                ToolVersionService,
+                GP_OWNER,
+                GP_REPO,
+                GP_JAR_NAME,
+            )
+
+            releases = ToolVersionService.fetch_releases(
+                GP_OWNER, GP_REPO, GP_JAR_NAME
+            )
+
+            # Preserve current selection
+            current_data = self._gp_version_combo.currentData()
+
+            self._gp_version_combo.clear()
+            self._gp_version_combo.addItem(self._gp_builtin_label, None)
+
+            for release in releases:
+                self._gp_version_combo.addItem(release.tag, release.tag)
+
+            # Restore selection
+            if current_data:
+                idx = self._gp_version_combo.findData(current_data)
+                if idx >= 0:
+                    self._gp_version_combo.setCurrentIndex(idx)
+
+            self._gp_status_label.setText(f"Found {len(releases)} releases")
+            self._gp_releases = {r.tag: r for r in releases}
+
+        except Exception as e:
+            self._gp_status_label.setText(f"Error: {e}")
+        finally:
+            self._gp_refresh_btn.setEnabled(True)
+
+    def get_custom_gp_version(self):
+        """Get the selected custom GP version tag, or None for built-in."""
+        return self._gp_version_combo.currentData()
+
+    def get_gp_releases(self) -> dict:
+        """Get the cached release info dict {tag: ReleaseInfo}."""
+        return self._gp_releases
 
     def _on_debug_toggled(self, checked: bool):
         self._config["show_debug"] = checked
@@ -1312,6 +1411,50 @@ class FidesmoTab(QWidget):
 
         layout.addWidget(status_group)
 
+        # FDSM Version section
+        fdsm_group = QGroupBox("FDSM Version")
+        fdsm_layout = QVBoxLayout(fdsm_group)
+
+        fdsm_desc = QLabel(
+            "Select a different version of FDSM (fdsm.jar) to use "
+            "for Fidesmo device operations. Versions are fetched from GitHub releases."
+        )
+        fdsm_desc.setStyleSheet(f"color: {Colors.muted_text()};")
+        fdsm_desc.setWordWrap(True)
+        fdsm_layout.addWidget(fdsm_desc)
+
+        fdsm_version_row = QHBoxLayout()
+        fdsm_version_row.addWidget(QLabel("Version:"))
+        self._fdsm_version_combo = QComboBox()
+        # FDSM version detection requires Java so we defer it to first Refresh
+        self._fdsm_builtin_label = "Built-in"
+        self._fdsm_version_detected = False
+        self._fdsm_version_combo.addItem(self._fdsm_builtin_label, None)
+        # If config has a previously selected version, add and select it
+        current_fdsm = self._config.get("custom_fdsm_version")
+        if current_fdsm:
+            self._fdsm_version_combo.addItem(current_fdsm, current_fdsm)
+            self._fdsm_version_combo.setCurrentIndex(1)
+        self._fdsm_version_combo.currentIndexChanged.connect(
+            lambda: self.settings_changed.emit()
+        )
+        fdsm_version_row.addWidget(self._fdsm_version_combo, 1)
+
+        self._fdsm_refresh_btn = QPushButton("Refresh")
+        self._fdsm_refresh_btn.setToolTip("Fetch available versions from GitHub")
+        self._fdsm_refresh_btn.clicked.connect(self._on_refresh_fdsm_versions)
+        fdsm_version_row.addWidget(self._fdsm_refresh_btn)
+        fdsm_layout.addLayout(fdsm_version_row)
+
+        self._fdsm_status_label = QLabel("")
+        self._fdsm_status_label.setStyleSheet(f"color: {Colors.muted_text()};")
+        fdsm_layout.addWidget(self._fdsm_status_label)
+
+        layout.addWidget(fdsm_group)
+
+        # Internal cache of fetched releases
+        self._fdsm_releases = {}
+
         # Authentication section
         auth_group = QGroupBox("Authentication")
         auth_layout = QVBoxLayout(auth_group)
@@ -1396,6 +1539,67 @@ class FidesmoTab(QWidget):
         layout.addWidget(app_group)
 
         layout.addStretch()
+
+    def _on_refresh_fdsm_versions(self):
+        """Fetch FDSM releases from GitHub and populate the dropdown."""
+        self._fdsm_refresh_btn.setEnabled(False)
+        self._fdsm_status_label.setText("Fetching releases from GitHub...")
+        QApplication.processEvents()
+
+        try:
+            from src.services.tool_version_service import (
+                ToolVersionService,
+                FDSM_OWNER,
+                FDSM_REPO,
+                FDSM_JAR_NAME,
+            )
+
+            # Detect built-in version on first Refresh (requires Java)
+            if not self._fdsm_version_detected:
+                self._fdsm_status_label.setText("Detecting built-in version...")
+                QApplication.processEvents()
+                fdsm_ver = ToolVersionService.detect_bundled_fdsm_version()
+                if fdsm_ver:
+                    self._fdsm_builtin_label = f"Built-in ({fdsm_ver})"
+                self._fdsm_version_detected = True
+
+            self._fdsm_status_label.setText("Fetching releases from GitHub...")
+            QApplication.processEvents()
+
+            releases = ToolVersionService.fetch_releases(
+                FDSM_OWNER, FDSM_REPO, FDSM_JAR_NAME
+            )
+
+            # Preserve current selection
+            current_data = self._fdsm_version_combo.currentData()
+
+            self._fdsm_version_combo.clear()
+            self._fdsm_version_combo.addItem(self._fdsm_builtin_label, None)
+
+            for release in releases:
+                self._fdsm_version_combo.addItem(release.tag, release.tag)
+
+            # Restore selection
+            if current_data:
+                idx = self._fdsm_version_combo.findData(current_data)
+                if idx >= 0:
+                    self._fdsm_version_combo.setCurrentIndex(idx)
+
+            self._fdsm_status_label.setText(f"Found {len(releases)} releases")
+            self._fdsm_releases = {r.tag: r for r in releases}
+
+        except Exception as e:
+            self._fdsm_status_label.setText(f"Error: {e}")
+        finally:
+            self._fdsm_refresh_btn.setEnabled(True)
+
+    def get_custom_fdsm_version(self):
+        """Get the selected custom FDSM version tag, or None for built-in."""
+        return self._fdsm_version_combo.currentData()
+
+    def get_fdsm_releases(self) -> dict:
+        """Get the cached release info dict {tag: ReleaseInfo}."""
+        return self._fdsm_releases
 
     def _has_stored_token(self) -> bool:
         """Check if a token is currently stored in secure storage."""
@@ -1586,6 +1790,8 @@ class SettingsDialog(QDialog):
         self._config["disabled_plugins"] = self._plugins_tab.get_disabled_plugins()
         self._config["hidden_plugins"] = self._plugins_tab.get_hidden_plugins()
         self._config["cache_timeout"] = self._storage_tab.get_cache_timeout()
+        self._config["custom_gp_version"] = self._general_tab.get_custom_gp_version()
+        self._config["custom_fdsm_version"] = self._fidesmo_tab.get_custom_fdsm_version()
 
     def _on_edit_plugin(self, plugin_name: str, yaml_path: str):
         """Handle edit plugin request - open wizard with loaded data."""

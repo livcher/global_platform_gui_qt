@@ -94,6 +94,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QDialogButtonBox,
     QSizePolicy,
+    QProgressDialog,
 )
 from PyQt5.QtCore import QTimer, Qt, QSize, QEvent, pyqtSignal
 import sip
@@ -360,6 +361,8 @@ DEFAULT_CONFIG = {
         "width": WIDTH_HEIGHT[0],
     },
     "plugin_command_consent": {},  # plugin_name -> bool (user consent for external commands)
+    "custom_gp_version": None,    # None = built-in, else release tag string
+    "custom_fdsm_version": None,  # None = built-in, else release tag string
 }
 
 """
@@ -560,6 +563,12 @@ class GPManagerApp(QMainWindow):
         self._plugin_menu_actions = {}  # {plugin_name: {item_id: QAction}}
         self._plugin_menu_item_defs = {}  # {plugin_name: {item_id: MenuItemDefinition}}
         self.plugins_menu.menuAction().setVisible(False)  # Hidden until plugins populate it
+
+        # Help menu
+        help_menu = self.menu_bar.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._show_about_dialog)
+        help_menu.addAction(about_action)
 
         # Check Java availability for FDSM/Fidesmo support
         self._java_info = None
@@ -804,7 +813,19 @@ class GPManagerApp(QMainWindow):
         #
         # 4) Start NFC handler
         #
-        self.nfc_thread = NFCHandlerThread(self)
+        from src.services.tool_version_service import ToolVersionService
+
+        custom_gp_path = ToolVersionService.resolve_gp_path(
+            self.config.get("custom_gp_version")
+        )
+        custom_fdsm_path = ToolVersionService.resolve_fdsm_path(
+            self.config.get("custom_fdsm_version")
+        )
+        self.nfc_thread = NFCHandlerThread(
+            self,
+            custom_gp_path=custom_gp_path,
+            custom_fdsm_path=custom_fdsm_path,
+        )
         self.nfc_thread.readers_updated_signal.connect(self.readers_updated)
         self.nfc_thread.card_present_signal.connect(self.update_card_presence)
         self.nfc_thread.status_update_signal.connect(self.process_nfc_status)
@@ -1286,6 +1307,25 @@ class GPManagerApp(QMainWindow):
                 self.nfc_thread.start()
         self.on_operation_complete(True, "Forced update completed.")
 
+    def _show_about_dialog(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About Global Platform GUI")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(
+            "<h3>Global Platform GUI</h3>"
+            "<p>A cross-platform GUI for managing JavaCard applets.</p>"
+            "<p><b>Core tool:</b> "
+            '<a href="https://github.com/martinpaljak/GlobalPlatformPro">'
+            "GlobalPlatformPro</a> by Martin Paljak (LGPL v3)</p>"
+            "<p><b>Fidesmo support:</b> "
+            '<a href="https://github.com/fidesmo/fdsm">'
+            "FDSM</a> by Fidesmo AB (MIT)</p>"
+            "<p>See <b>THIRD_PARTY_LICENSES.md</b> for full attribution.</p>"
+            "<p>Licensed under the GNU Lesser General Public License v3.<br>"
+            "Combined distribution with PyQt5 is subject to GPL v3.</p>"
+        )
+        msg.exec_()
+
     def show_plugin_designer(self):
         """Show the YAML plugin designer wizard."""
         wizard = PluginDesignerWizard(self)
@@ -1327,6 +1367,10 @@ class GPManagerApp(QMainWindow):
         if dialog.exec_() == dialog.Accepted:
             # Update config with settings
             self.config = dialog.get_config()
+
+            # Handle custom tool version downloads
+            self._apply_custom_tool_versions(dialog)
+
             self.write_config()
 
             # Refresh the Available Apps list to reflect enabled/disabled plugins
@@ -1338,6 +1382,75 @@ class GPManagerApp(QMainWindow):
                     "Restart Required",
                     "Plugin changes will take effect after restarting the application."
                 )
+
+    def _apply_custom_tool_versions(self, dialog):
+        """Download custom tool versions if needed and update running services."""
+        from src.services.tool_version_service import ToolVersionService
+
+        # Handle GP version
+        gp_version = self.config.get("custom_gp_version")
+        if gp_version and not ToolVersionService.is_version_downloaded("gp", gp_version):
+            gp_releases = dialog._general_tab.get_gp_releases()
+            if gp_version in gp_releases:
+                if not self._download_tool_version(
+                    "gp", gp_version, gp_releases[gp_version].jar_download_url,
+                    "GlobalPlatformPro"
+                ):
+                    self.config["custom_gp_version"] = None
+
+        # Handle FDSM version
+        fdsm_version = self.config.get("custom_fdsm_version")
+        if fdsm_version and not ToolVersionService.is_version_downloaded("fdsm", fdsm_version):
+            fdsm_releases = dialog._fidesmo_tab.get_fdsm_releases()
+            if fdsm_version in fdsm_releases:
+                if not self._download_tool_version(
+                    "fdsm", fdsm_version, fdsm_releases[fdsm_version].jar_download_url,
+                    "FDSM"
+                ):
+                    self.config["custom_fdsm_version"] = None
+
+        # Apply resolved paths to running thread
+        gp_path = ToolVersionService.resolve_gp_path(
+            self.config.get("custom_gp_version")
+        )
+        fdsm_path = ToolVersionService.resolve_fdsm_path(
+            self.config.get("custom_fdsm_version")
+        )
+        self.nfc_thread.set_gp_path(gp_path)
+        self.nfc_thread.set_fdsm_path(fdsm_path)
+
+    def _download_tool_version(self, tool_name, tag, download_url, display_name):
+        """Download a tool version with progress dialog. Returns True on success."""
+        from src.services.tool_version_service import ToolVersionService
+
+        progress = QProgressDialog(
+            f"Downloading {display_name} {tag}...", "Cancel", 0, 100, self
+        )
+        progress.setWindowTitle("Downloading")
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        QApplication.processEvents()
+
+        try:
+            def on_progress(bytes_read, total):
+                if total > 0:
+                    pct = int(bytes_read * 100 / total)
+                    progress.setValue(pct)
+                QApplication.processEvents()
+
+            ToolVersionService.download_tool(
+                tool_name, tag, download_url, progress_callback=on_progress
+            )
+            progress.close()
+            return True
+        except Exception as e:
+            progress.close()
+            QMessageBox.warning(
+                self, "Download Failed",
+                f"Failed to download {display_name} {tag}:\n{e}\n\n"
+                "Reverting to built-in version."
+            )
+            return False
 
     def _get_storage_info(self) -> dict:
         """Get storage information for display in settings."""

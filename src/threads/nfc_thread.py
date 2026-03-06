@@ -97,6 +97,8 @@ class NFCHandlerThread(QThread):
         gp_service: Optional["IGPService"] = None,
         parent=None,
         use_event_bus: bool = False,
+        custom_gp_path: Optional[str] = None,
+        custom_fdsm_path: Optional[str] = None,
     ):
         """
         Initialize the NFC handler thread.
@@ -106,6 +108,8 @@ class NFCHandlerThread(QThread):
             gp_service: Service for GlobalPlatformPro operations
             parent: Optional QThread parent
             use_event_bus: If True, emit EventBus events in addition to signals
+            custom_gp_path: Path to custom gp.jar (None = use built-in)
+            custom_fdsm_path: Path to custom fdsm.jar (None = use built-in)
         """
         super().__init__(parent)
         self.app = app
@@ -136,19 +140,13 @@ class NFCHandlerThread(QThread):
         # Fidesmo support
         self._card_type: CardType = CardType.UNKNOWN
         self._fdsm_service = None  # Lazy-loaded FDSMService
+        self._custom_fdsm_path = custom_fdsm_path
 
         # Storage tracking
         self.storage = {"persistent": -1, "transient": -1, "persistent_total": -1}
 
         # GlobalPlatformPro command paths
-        self.gp = {
-            "posix": [resource_path("gp.jar")],
-            "nt": ["java", "-jar", resource_path("gp.jar")],
-        }
-
-        # Add java for posix if needed
-        if os.name == "posix":
-            self.gp["posix"] = ["java", "-jar", *self.gp["posix"]]
+        self._build_gp_paths(custom_gp_path)
 
     @property
     def card_id(self) -> Optional[str]:
@@ -167,11 +165,32 @@ class NFCHandlerThread(QThread):
         """Check if the current card is a Fidesmo device."""
         return self._card_type == CardType.FIDESMO
 
+    def _build_gp_paths(self, gp_jar_path: Optional[str] = None):
+        """Build the GP command paths dict from a JAR path."""
+        gp_jar = gp_jar_path or resource_path("gp.jar")
+        self.gp = {
+            "posix": ["java", "-jar", gp_jar],
+            "nt": ["java", "-jar", gp_jar],
+        }
+
+    def set_gp_path(self, gp_jar_path: Optional[str] = None):
+        """Update the GP tool path at runtime. None reverts to built-in."""
+        self._build_gp_paths(gp_jar_path)
+        # Recreate gp_service with the new path
+        if self._gp_service is not None:
+            from ..services.gp_service import GPService
+            self._gp_service = GPService(gp_path=gp_jar_path)
+
+    def set_fdsm_path(self, fdsm_jar_path: Optional[str] = None):
+        """Update the FDSM tool path at runtime. None reverts to built-in."""
+        self._custom_fdsm_path = fdsm_jar_path
+        self._fdsm_service = None  # Force re-creation on next lazy load
+
     def _get_fdsm_service(self):
         """Lazy-load FDSMService instance."""
         if self._fdsm_service is None:
             from ..services.fdsm_service import FDSMService
-            self._fdsm_service = FDSMService()
+            self._fdsm_service = FDSMService(fdsm_path=self._custom_fdsm_path)
         return self._fdsm_service
 
     def _get_fidesmo_auth(self):

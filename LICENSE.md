@@ -1,4 +1,14 @@
 
+# License
+
+This project is licensed under the GNU Lesser General Public License v3 (LGPL-3.0).
+
+**Note:** This application links to PyQt5, which is licensed under the GNU General
+Public License v3 (GPL-3.0). As a result, the combined distributed application is
+subject to the terms of the GPL v3. See THIRD_PARTY_LICENSES.md for full details.
+
+---
+
 GNU LESSER GENERAL PUBLIC LICENSE
 
 Version 3, 29 June 2007

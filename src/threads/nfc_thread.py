@@ -1070,6 +1070,71 @@ class NFCHandlerThread(QThread):
         finally:
             self.resume()
 
+    def get_uid_config(self) -> Optional[Dict[str, int]]:
+        """Read the NXP UID config tags (10A1-10A5) over a secure channel.
+
+        Requires the tag's key (known tag, not Fidesmo). Returns a dict
+        mapping each tag to its integer value, or None on failure.
+        """
+        if not self.selected_reader_name or not self.key or self.is_fidesmo:
+            return None
+
+        from ..services import uid_mode
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+        try:
+            command = ["-d"]
+            for apdu in uid_mode.get_config_apdus():
+                command += ["-s", apdu]
+
+            result = self.run_gp(command, "Unable to read UID config:")
+            if not isinstance(result, str):
+                return None
+
+            config = uid_mode.parse_config_response(result)
+            return config or None
+        except Exception as e:
+            self._emit_error(f"Exception reading UID config: {e}")
+            return None
+        finally:
+            self.resume()
+
+    def apply_uid_mode(
+        self, mode_key: str, current_config: Optional[Dict[str, int]] = None
+    ) -> bool:
+        """Switch the card to ``mode_key`` by writing the config tags.
+
+        ``current_config`` is used to preserve the MFC bit when randomizing.
+        Returns True only if every STORE DATA returned 9000.
+        """
+        if not self.selected_reader_name or not self.key or self.is_fidesmo:
+            return False
+
+        from ..services import uid_mode
+
+        apdus = uid_mode.set_apdus_for_mode(mode_key, current_config or {})
+        if not apdus:
+            return False
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+        try:
+            command = ["-d"]
+            for apdu in apdus:
+                command += ["-s", apdu]
+
+            result = self.run_gp(command, "Unable to set UID mode:")
+            if not isinstance(result, str):
+                return False
+
+            return uid_mode.store_data_succeeded(result)
+        except Exception as e:
+            self._emit_error(f"Exception setting UID mode: {e}")
+            return False
+        finally:
+            self.resume()
+
     def supports_scp03(self) -> Optional[bool]:
         """
         Check if the current card supports SCP03.

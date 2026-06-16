@@ -521,6 +521,8 @@ class GPManagerApp(QMainWindow):
         set_tag_key_action.triggered.connect(self.set_tag_key)
         change_tag_key_action = QAction("⚠️ Change Key ⚠️", self)
         change_tag_key_action.triggered.connect(self.change_tag_key)
+        change_uid_mode_action = QAction("Change UID Mode", self)
+        change_uid_mode_action.triggered.connect(self.change_uid_mode)
         manage_tags_action = QAction("Manage Known Tags", self)
         manage_tags_action.triggered.connect(self.manage_tags)
 
@@ -528,11 +530,13 @@ class GPManagerApp(QMainWindow):
         self._set_tag_name_action = set_tag_name_action
         self._set_tag_key_action = set_tag_key_action
         self._change_tag_key_action = change_tag_key_action
+        self._change_uid_mode_action = change_uid_mode_action
         self._manage_tags_action = manage_tags_action
 
         tag_menu.addAction(set_tag_name_action)
         tag_menu.addAction(set_tag_key_action)
         tag_menu.addAction(change_tag_key_action)
+        tag_menu.addAction(change_uid_mode_action)
         tag_menu.addSeparator()
         tag_menu.addAction(manage_tags_action)
 
@@ -540,6 +544,7 @@ class GPManagerApp(QMainWindow):
         set_tag_name_action.setEnabled(False)
         set_tag_key_action.setEnabled(False)
         change_tag_key_action.setEnabled(False)
+        change_uid_mode_action.setEnabled(False)
         manage_tags_action.setEnabled(False)
 
         self.tag_menu = tag_menu
@@ -1188,6 +1193,13 @@ class GPManagerApp(QMainWindow):
             self._set_tag_key_action.setEnabled(tag_present)
         if hasattr(self, '_change_tag_key_action'):
             self._change_tag_key_action.setEnabled(tag_present)
+        if hasattr(self, '_change_uid_mode_action'):
+            # UID-mode config needs the tag's key (secure channel) and is not
+            # supported on Fidesmo; tag_present already excludes Fidesmo, but
+            # guard explicitly for clarity.
+            self._change_uid_mode_action.setEnabled(
+                tag_present and not self.nfc_thread.is_fidesmo
+            )
 
         # "Manage Known Tags" is available when secure storage exists
         # (doesn't require a card to be connected)
@@ -3661,6 +3673,35 @@ class GPManagerApp(QMainWindow):
                     new_config=new_config,
                     old_config=current_config,
                 )
+
+    def change_uid_mode(self):
+        """Open the Change UID Mode dialog for the current (known) tag.
+
+        Reads the NXP config tags (10A1-10A5) over a secure channel using the
+        tag's key, lets the user switch UID modes, and re-reads afterwards.
+        Not available for unknown tags or Fidesmo devices.
+        """
+        from src.views.dialogs.change_uid_mode_dialog import ChangeUidModeDialog
+
+        if not self.nfc_thread.key or self.nfc_thread.is_fidesmo:
+            return
+
+        def read_config():
+            self.loading_indicator.start("Reading chip configuration...")
+            try:
+                return self.nfc_thread.get_uid_config()
+            finally:
+                self.loading_indicator.stop()
+
+        def apply_mode(mode_key, current_config):
+            return self.nfc_thread.apply_uid_mode(mode_key, current_config)
+
+        dialog = ChangeUidModeDialog(
+            read_config=read_config,
+            apply_mode=apply_mode,
+            parent=self,
+        )
+        dialog.exec_()
 
     def _get_key_config_for_card(self, card_id: str):
         """Get the stored KeyConfiguration for a card if available."""

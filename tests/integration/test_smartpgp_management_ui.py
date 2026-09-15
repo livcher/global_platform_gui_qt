@@ -105,7 +105,7 @@ class SmartPGPManagementUITest:
 
         try:
             from src.plugins.yaml.adapter import YamlPluginAdapter
-            yaml_path = PROJECT_ROOT / "plugins" / "examples" / "smartpgp.yaml"
+            yaml_path = PROJECT_ROOT / "plugins" / "examples" / "smartpgp.gp-plugin.yaml"
 
             if not yaml_path.exists():
                 self.test_fail("Load plugin", f"File not found: {yaml_path}")

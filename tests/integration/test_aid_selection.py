@@ -86,7 +86,7 @@ def test_management_dialog_aid():
     from src.plugins.yaml.adapter import YamlPluginAdapter
 
     # Load SmartPGP plugin
-    adapter = YamlPluginAdapter.from_file("plugins/examples/smartpgp.yaml")
+    adapter = YamlPluginAdapter.from_file("plugins/examples/smartpgp.gp-plugin.yaml")
 
     # Check that it has a dynamic AID
     assert adapter._schema.has_dynamic_aid(), "SmartPGP should have dynamic AID"
